@@ -17,6 +17,7 @@
   import MapControls from './ui/shell/MapControls.svelte';
   import GenerateTab from './ui/world/GenerateTab.svelte';
   import LibraryTab from './ui/world/LibraryTab.svelte';
+  import StatsTab from './ui/world/StatsTab.svelte';
   import { WorldDraft } from './ui/world/draft.svelte';
   import Icon from './ui/Icon.svelte';
   import Readout from './ui/shell/Readout.svelte';
@@ -1519,6 +1520,7 @@
         { key: 'generate', label: 'Generate', icon: 'globe' },
         { key: 'sketch', label: 'Sketch', icon: 'sketch', dot: sketchOn, title: sketchOn ? 'Sketching' : 'Draw coastlines, ranges, rivers, biomes and settlements' },
         { key: 'library', label: 'Library', icon: 'folder' },
+        { key: 'stats', label: 'Statistics', icon: 'activity' },
       ]}
       tab={shell.tabs.world}
       onTab={(k) => go('world', k)}
@@ -1568,8 +1570,10 @@
                 <button class="ws-btn primary" onclick={enterSketch} disabled={busy}><Icon name="sketch" size={16} /> Start sketching</button>
               </div>
             {/if}
-          {:else}
+          {:else if shell.tabs.world === 'library'}
             <LibraryTab {world} {busy} onOpen={openWorld} onStartOver={startOver} />
+          {:else}
+            <StatsTab {overlay} onSelect={(f) => select({ kind: 'feature', feature: f })} />
           {/if}
         {/if}
       {/snippet}
