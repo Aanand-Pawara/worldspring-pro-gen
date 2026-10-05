@@ -39,6 +39,10 @@
   const towns = $derived(settlements.filter((f) => f.kind === 'town'));
   const villages = $derived(settlements.filter((f) => f.kind === 'village'));
   const capitals = $derived(settlements.filter((f) => (f.detail ?? '').includes(', capital')));
+  const cityPopulation = $derived(cities.reduce((n, f) => n + population(f), 0));
+  const capitalPopulation = $derived(capitals.reduce((n, f) => n + population(f), 0));
+  const cityPopulationShare = $derived(totalPopulation ? Math.round((cityPopulation / totalPopulation) * 100) : 0);
+  const capitalPopulationShare = $derived(totalPopulation ? Math.round((capitalPopulation / totalPopulation) * 100) : 0);
   const namedKinds = $derived(new Set(features.map((f) => f.kind)).size);
 
   const largestSettlement = $derived(settlements.reduce<Feature | null>((best, f) => !best || population(f) > population(best) ? f : best, null));
@@ -79,6 +83,8 @@
       { text: `Its named settlements account for an estimated ${fmt(totalPopulation)} people across ${fmt(settlements.length)} settlements.`, tag: 'PEOPLE' },
       { text: `${fmt(cities.length)} cities or metropolises, ${fmt(towns.length)} towns and ${fmt(villages.length)} villages make up the settlement network.`, tag: 'PEOPLE' },
       { text: `${fmt(capitals.length)} generated settlement${capitals.length === 1 ? '' : 's'} ${capitals.length === 1 ? 'is' : 'are'} marked as capital${capitals.length === 1 ? '' : 's'}.`, tag: 'CIVILIZATION' },
+      { text: `Cities and metropolises contain about ${fmt(cityPopulationShare)}% of the generated population.`, tag: 'CIVILIZATION' },
+      { text: capitals.length ? `Capital settlements contain about ${fmt(capitalPopulationShare)}% of the generated population.` : 'No generated settlement is marked as a capital.', tag: 'CIVILIZATION' },
       { text: `${fmt(volcanoes.length)} named volcanoes are present: ${fmt(activeVolcanoes.length)} active, ${fmt(dormantVolcanoes.length)} dormant and ${fmt(extinctVolcanoes.length)} extinct.`, tag: 'GEOLOGY' },
       { text: `${fmt(regions.length)} named biome regions were generated; ${leadingRegion ? `${leadingRegion[1]} are ${leadingRegion[0].replace('_', ' ')} regions, the most represented named region type.` : 'no large named biome region was extracted.'}`, tag: 'CLIMATE' },
     ];
@@ -158,6 +164,8 @@
         <div><span>Towns</span><b>{fmt(towns.length)}</b></div>
         <div><span>Villages</span><b>{fmt(villages.length)}</b></div>
         <div><span>Capitals</span><b>{fmt(capitals.length)}</b></div>
+        <div><span>Urban population</span><b>{fmt(cityPopulationShare)}%</b></div>
+        <div><span>Capital population</span><b>{fmt(capitalPopulationShare)}%</b></div>
         <div><span>Mountain ranges</span><b>{fmt(ranges.length)}</b></div>
         <div><span>Named rivers</span><b>{fmt(rivers.length)}</b></div>
         <div><span>Volcanoes</span><b>{fmt(volcanoes.length)}</b></div>
