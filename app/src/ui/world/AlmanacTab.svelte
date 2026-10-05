@@ -141,9 +141,9 @@
   </header>
 
   <nav class="subtabs" aria-label="Almanac views">
-    <button type="button" class:on={mode === 'overview'} onclick={() => { mode = 'overview'; }}><Icon name="globe" size={14} /> Overview</button>
-    <button type="button" class:on={mode === 'facts'} onclick={() => { mode = 'facts'; }}><Icon name="dice" size={14} /> Facts</button>
-    <button type="button" class:on={mode === 'rankings'} onclick={() => { mode = 'rankings'; }}><Icon name="activity" size={14} /> Rankings</button>
+    <button type="button" class:on={mode === 'overview'} onclick={(e) => { e.stopPropagation(); mode = 'overview'; }}><Icon name="globe" size={14} /> Overview</button>
+    <button type="button" class:on={mode === 'facts'} onclick={(e) => { e.stopPropagation(); mode = 'facts'; }}><Icon name="dice" size={14} /> Facts</button>
+    <button type="button" class:on={mode === 'rankings'} onclick={(e) => { e.stopPropagation(); mode = 'rankings'; }}><Icon name="activity" size={14} /> Rankings</button>
   </nav>
 
   {#if !overlay}
@@ -204,10 +204,10 @@
     <div class="fact-note">Facts are calculated from generated data. Proximity facts use named feature anchors, so they never pretend we have a road network or historical record when we don't.</div>
   {:else}
     <nav class="rank-tabs" aria-label="Ranking categories">
-      <button class:on={ranking === 'settlements'} onclick={() => (ranking = 'settlements')}>Settlements</button>
-      <button class:on={ranking === 'terrain'} onclick={() => (ranking = 'terrain')}>Terrain</button>
+      <button class:on={ranking === 'settlements'} onclick={(e) => { e.stopPropagation(); ranking = 'settlements'; }}>Settlements</button>
+      <button class:on={ranking === 'terrain'} onclick={(e) => { e.stopPropagation(); ranking = 'terrain'; }}>Terrain</button>
       <button class:on={ranking === 'water'} onclick={() => (ranking === 'water')}>Water</button>
-      <button class:on={ranking === 'regions'} onclick={() => (ranking = 'regions')}>Biomes</button>
+      <button class:on={ranking === 'regions'} onclick={(e) => { e.stopPropagation(); ranking = 'regions'; }}>Biomes</button>
     </nav>
 
     {#if ranking === 'settlements'}
