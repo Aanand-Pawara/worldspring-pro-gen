@@ -447,7 +447,7 @@ impl Builder<'_> {
                 let b = pts[(m + 3).min(pts.len() - 1)];
                 let angle = upright(libm::atan2(b[1] - a[1], b[0] - a[0]));
                 let len = r.cells.len() as f64 * inp.cell_ft;
-                let id = self.push("river", NameKind::River, pts[m][0], pts[m][1], angle, len, None, Some(format!("river index {ri}")));
+                let id = self.push("river", NameKind::River, pts[m][0], pts[m][1], angle, len, None, None);
                 let path = r.cells.iter().zip(&r.q).map(|(&cell, &q)| {
                     let k = cell as usize;
                     let x = (k % w) as f64 * inp.cell_ft;
