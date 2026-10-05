@@ -180,6 +180,9 @@ export class MapView {
   tool: PointerTool | null = null;
   /** What the tool draws over everything (`PointerTool.draw`). */
   private readonly toolLayer = new Graphics();
+  /** Selected river highlight, deliberately separate from the always-on river renderer. */
+  private readonly selectedRiverLayer = new Graphics();
+  private selectedRiver: Feature | null = null;
   private toolDrawn = false;
   private toolPointer: number | null = null;
   /** Called every frame after the camera moved and the map updated. */
@@ -235,6 +238,27 @@ export class MapView {
   ) {
     this.interiorStyle = { player: role === 'player', doors: null };
     this.ownKeys = opts.keys ?? true;
+  }
+
+  /** Highlight only a selected river. Normal rivers stay in the normal map layer. */
+  setSelectedFeature(feature: Feature | null) {
+    this.selectedRiver = feature?.kind === 'river' && (feature.river_path?.length ?? 0) > 1 ? feature : null;
+    this.drawSelectedRiver();
+  }
+
+  private drawSelectedRiver() {
+    const g = this.selectedRiverLayer;
+    g.clear();
+    const path = this.selectedRiver?.river_path;
+    if (!path || path.length < 2) return;
+    const pts = path.map(([x, y]) => this.cam.worldToScreen(x, y));
+    const draw = (width: number, color: number, alpha: number) => {
+      g.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]);
+      g.stroke({ width, color, alpha, join: 'round', cap: 'round' });
+    };
+    draw(8, 0xffd166, 0.9);
+    draw(3, 0xffffff, 0.95);
   }
 
   /** Input is off: a script drives the camera, or the DM holds it. */
@@ -642,6 +666,8 @@ export class MapView {
     this.peekCache.clear();
     this.lastWantKey = '';
     this.geom = geom;
+    this.selectedRiver = null;
+    this.selectedRiverLayer.clear();
     this.overlay = this.baseOverlay = overlay;
     this.tiles = new TileLayer(geom, this.gen);
     this.labels = new Labels(overlay.features);
@@ -662,6 +688,7 @@ export class MapView {
     this.battle.sprites = this.edits.sprites ?? {};
     this.battle.warmup();
     this.app.stage.addChild(this.tiles.container);
+    this.app.stage.addChild(this.selectedRiverLayer);
     this.app.stage.addChild(this.battle.container);
     this.app.stage.addChild(this.playUnder);
     this.app.stage.addChild(this.labels.container);
@@ -932,6 +959,7 @@ export class MapView {
         this.lastWantKey = wantKey;
         this.gen.want(want);
       }
+      this.drawSelectedRiver();
       const t1 = performance.now();
       this.labels?.update(this.cam, now);
       this.sketchLayer?.update(this.cam);
