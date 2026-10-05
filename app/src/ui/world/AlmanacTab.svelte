@@ -48,6 +48,7 @@
   const largestSettlement = $derived(settlements.reduce<Feature | null>((best, f) => !best || population(f) > population(best) ? f : best, null));
   const highestPeak = $derived(peaks.reduce<Feature | null>((best, f) => !best || (f.elev_ft ?? 0) > (best.elev_ft ?? 0) ? f : best, null));
   const longestRiver = $derived(rivers.reduce<Feature | null>((best, f) => !best || f.extent_ft > best.extent_ft ? f : best, null));
+  const largestRiverBasin = $derived(rivers.reduce<Feature | null>((best, f) => !best || (f.drainage_area_mi2 ?? 0) > (best.drainage_area_mi2 ?? 0) ? f : best, null));
   const largestLake = $derived(lakes.reduce<Feature | null>((best, f) => !best || f.extent_ft > best.extent_ft ? f : best, null));
   const largestLandmass = $derived(landmasses.reduce<Feature | null>((best, f) => !best || f.extent_ft > best.extent_ft ? f : best, null));
   const highestWaterfall = $derived(waterfalls.reduce<Feature | null>((best, f) => !best || drop(f) > drop(best) ? f : best, null));
@@ -91,6 +92,7 @@
     if (largestSettlement) out.push({ text: `${name(largestSettlement)} is the largest settlement, with an estimated population of ${fmt(population(largestSettlement))}.`, tag: 'PEOPLE', feature: largestSettlement });
     if (highestPeak) out.push({ text: `${name(highestPeak)} is the highest named summit at ${fmt(Math.round(highestPeak.elev_ft ?? 0))} ft above sea level.`, tag: 'TERRAIN', feature: highestPeak });
     if (longestRiver) out.push({ text: `${name(longestRiver)} is the longest named river at about ${fmtMiles(miles(longestRiver.extent_ft))} miles.`, tag: 'WATER', feature: longestRiver });
+    if (largestRiverBasin) out.push({ text: `${name(largestRiverBasin)} drains the largest modeled catchment, about ${fmtMiles(largestRiverBasin.drainage_area_mi2 ?? 0)} square miles, at stream order ${largestRiverBasin.stream_order ?? 1}.`, tag: 'HYDROLOGY', feature: largestRiverBasin });
     if (largestLake) out.push({ text: `${name(largestLake)} is the largest generated lake-type feature by stored extent, about ${fmtMiles(areaSqMi(largestLake.extent_ft))} square miles.`, tag: 'WATER', feature: largestLake });
     if (largestLandmass) out.push({ text: `${name(largestLandmass)} is the largest generated landmass by stored extent, about ${fmtMiles(areaSqMi(largestLandmass.extent_ft))} square miles.`, tag: 'GEOGRAPHY', feature: largestLandmass });
     if (highestWaterfall) out.push({ text: `${name(highestWaterfall)} has the greatest named waterfall drop at about ${fmt(drop(highestWaterfall))} ft.`, tag: 'WATER', feature: highestWaterfall });
@@ -218,7 +220,9 @@
       {#if passes.length}<Rank title="Highest passes" items={[...passes].sort((a, b) => (b.elev_ft ?? 0) - (a.elev_ft ?? 0)).slice(0, 10)} value={(f) => fmt(Math.round(f.elev_ft ?? 0))} suffix=" ft" icon="mountain" {selectFeature} />{/if}
     {:else if ranking === 'water'}
       <Rank title="Longest rivers" items={riverRank.slice(0, 15)} value={(f) => fmtMiles(miles(f.extent_ft))} suffix=" mi" icon="river" {selectFeature} />
+      <Rank title="Largest drainage basins" items={[...rivers].sort((a, b) => (b.drainage_area_mi2 ?? 0) - (a.drainage_area_mi2 ?? 0)).slice(0, 15)} value={(f) => fmtMiles(f.drainage_area_mi2 ?? 0)} suffix=" mi²" icon="river" {selectFeature} />
       <Rank title="Largest lake-type features" items={lakeRank.slice(0, 15)} value={(f) => fmtMiles(areaSqMi(f.extent_ft))} suffix=" mi²" icon="waves" {selectFeature} />
+      <Rank title="Highest stream order" items={[...rivers].sort((a, b) => (b.stream_order ?? 0) - (a.stream_order ?? 0) || (b.drainage_area_mi2 ?? 0) - (a.drainage_area_mi2 ?? 0)).slice(0, 15)} value={(f) => fmt(f.stream_order ?? 0)} suffix="" icon="river" {selectFeature} />
       <Rank title="Greatest waterfalls" items={[...waterfalls].sort((a, b) => drop(b) - drop(a)).slice(0, 10)} value={(f) => fmt(drop(f))} suffix=" ft" icon="waves" {selectFeature} />
     {:else}
       <section>

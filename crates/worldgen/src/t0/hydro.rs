@@ -60,11 +60,23 @@ pub struct River {
     pub mouth: Mouth,
     /// Chain this one flows into, for tributaries.
     pub into: Option<usize>,
+    /// Strahler stream order: 1 for headwaters, increasing at equal-order confluences.
+    pub order: u8,
+    /// Number of routed land cells contributing to the source catchment.
+    pub drainage_area_cells: u32,
+    /// Largest modeled discharge along this chain.
+    pub peak_discharge: f32,
+    /// Number of direct tributary chains joining this chain.
+    pub tributary_count: u16,
+    /// Number of T0 flow cells in this chain.
+    pub length_cells: u32,
 }
 
 pub struct Hydro {
     /// Water surface elevation per cell (sea level, lake level) or `DRY`.
     pub water: Vec<f32>,
+    /// Number of routed land cells contributing to each active cell.
+    pub flow_accumulation: Vec<u32>,
     pub discharge: Vec<f32>,
     pub lake_of: Vec<u32>,
     pub lakes: Vec<Lake>,
@@ -178,11 +190,25 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
         }
     }
 
-    let rivers = extract_rivers(w, h, land, &lake_of, &rec, &q, RIVER_Q / river_density);
-    Hydro { water, discharge: q.iter().map(|&v| v as f32).collect(), lake_of, lakes, rivers }
+    let flow_accumulation = accumulate_flow(w, h, land, &lake_of, &rec, &fl.order);
+    let rivers = extract_rivers(w, h, land, &lake_of, &rec, &q, &flow_accumulation, RIVER_Q / river_density);
+    Hydro { water, flow_accumulation, discharge: q.iter().map(|&v| v as f32).collect(), lake_of, lakes, rivers }
 }
 
-fn extract_rivers(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32], q: &[f64], threshold: f64) -> Vec<River> {
+fn accumulate_flow(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32], order: &[u32]) -> Vec<u32> {
+    let n = w * h;
+    let mut acc = vec![0u32; n];
+    for i in 0..n { if land[i] && lake_of[i] == NO_LAKE { acc[i] = 1; } }
+    for &ii in order.iter().rev() {
+        let i = ii as usize;
+        if acc[i] == 0 { continue; }
+        let r = rec[i] as usize;
+        if r != i && land[r] && lake_of[r] == NO_LAKE { acc[r] = acc[r].saturating_add(acc[i]); }
+    }
+    acc
+}
+
+fn extract_rivers(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32], q: &[f64], accumulation: &[u32], threshold: f64) -> Vec<River> {
     let n = w * h;
     let is_river = |i: usize| land[i] && lake_of[i] == NO_LAKE && q[i] >= threshold;
     let mut donors = vec![0u8; n];
@@ -278,7 +304,7 @@ fn extract_rivers(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32
         }
         let mouth = if into.is_some() { Mouth::Confluence } else { segs[root].mouth };
         let qv = cells.iter().map(|&c| q[c as usize] as f32).collect();
-        chains.push(River { cells, q: qv, mouth, into });
+        chains.push(River { cells, q: qv, mouth, into, order: 1, drainage_area_cells: 0, peak_discharge: 0.0, tributary_count: 0, length_cells: 0 });
         for &k in &path {
             let main_child = path.iter().position(|&p| p == k).and_then(|i| path.get(i + 1)).copied();
             for &kid in &children[k] {
@@ -288,6 +314,61 @@ fn extract_rivers(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32
             }
         }
     }
+    // Strahler order is computed from headwaters downstream. Equal-order confluences
+    // increment; unequal-order confluences retain the larger order.
+    let mut pending = children.iter().map(Vec::len).collect::<Vec<_>>();
+    let mut seg_order = vec![0u8; segs.len()];
+    let mut queue: Vec<usize> = (0..segs.len()).filter(|&k| pending[k] == 0).collect();
+    queue.sort_unstable();
+    let mut qpos = 0;
+    while qpos < queue.len() {
+        let k = queue[qpos];
+        qpos += 1;
+        seg_order[k] = 1;
+        if let Some(p) = parent[k] {
+            pending[p] = pending[p].saturating_sub(1);
+            if pending[p] == 0 {
+                let max = children[p].iter().map(|&c| seg_order[c]).max().unwrap_or(1);
+                let count_max = children[p].iter().filter(|&&c| seg_order[c] == max).count();
+                seg_order[p] = max.saturating_add((count_max >= 2) as u8);
+                queue.push(p);
+            }
+        }
+    }
+    let tributary_counts: Vec<u16> = (0..chains.len()).map(|chain_id| chains.iter().filter(|r| r.into == Some(chain_id)).count().min(u16::MAX as usize) as u16).collect();
+    for (chain_id, chain) in chains.iter_mut().enumerate() {
+        let source = chain.cells.first().copied().unwrap_or(0) as usize;
+        let seg = segs.iter().position(|s| s.cells.last().copied() == chain.cells.last().copied());
+        chain.order = seg.map(|k| seg_order[k].max(1)).unwrap_or(1);
+        chain.drainage_area_cells = accumulation[source];
+        chain.peak_discharge = chain.q.iter().copied().fold(0.0f32, f32::max);
+        chain.tributary_count = tributary_counts[chain_id];
+        chain.length_cells = chain.cells.len().min(u32::MAX as usize) as u32;
+    }
     // Chains are indexed by `into`, so short ones are kept here and filtered by consumers.
     chains
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn flow_accumulation_counts_upstream_cells() {
+        let land = vec![true; 4];
+        let lake = vec![NO_LAKE; 4];
+        let rec = vec![1, 2, 2, 1];
+        let order = vec![2, 1, 0, 3];
+        let acc = accumulate_flow(4, 1, &land, &lake, &rec, &order);
+        assert_eq!(acc, vec![1, 3, 4, 1]);
+    }
+    #[test]
+    fn strahler_rule_keeps_higher_order_at_unequal_confluence() {
+        let cases = [([1u8, 1], 2u8), ([1u8, 2], 2u8), ([2u8, 2], 3u8)];
+        for (upstream, expected) in cases {
+            let max = upstream.iter().copied().max().unwrap();
+            let equal = upstream.iter().filter(|&&o| o == max).count() >= 2;
+            assert_eq!(max + equal as u8, expected);
+        }
+    }
 }

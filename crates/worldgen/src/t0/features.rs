@@ -34,6 +34,14 @@ pub struct Feature {
     /// Fine selection path for rivers only: x, y in ft and local channel width in ft.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub river_path: Option<Vec<[f64; 3]>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_order: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drainage_area_mi2: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discharge_index: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tributary_count: Option<u16>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -138,7 +146,7 @@ impl Builder<'_> {
             id.push('b');
         }
         let c = self.inp.cell_ft;
-        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, river_path: None });
+        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, river_path: None, stream_order: None, drainage_area_mi2: None, discharge_index: None, tributary_count: None });
         id
     }
 
@@ -447,7 +455,9 @@ impl Builder<'_> {
                 let b = pts[(m + 3).min(pts.len() - 1)];
                 let angle = upright(libm::atan2(b[1] - a[1], b[0] - a[0]));
                 let len = r.cells.len() as f64 * inp.cell_ft;
-                let id = self.push("river", NameKind::River, pts[m][0], pts[m][1], angle, len, None, None);
+                let basin_mi2 = r.drainage_area_cells as f64 * inp.cell_ft * inp.cell_ft / (5280.0 * 5280.0);
+                let detail = Some(format!("order {} | drainage area {:.1} sq mi | discharge index {:.0} | {} direct tributaries", r.order, basin_mi2, r.peak_discharge, r.tributary_count));
+                let id = self.push("river", NameKind::River, pts[m][0], pts[m][1], angle, len, None, detail);
                 let path = r.cells.iter().zip(&r.q).map(|(&cell, &q)| {
                     let k = cell as usize;
                     let x = (k % w) as f64 * inp.cell_ft;
@@ -456,6 +466,10 @@ impl Builder<'_> {
                 }).collect();
                 if let Some(f) = self.out.features.iter_mut().find(|f| f.id == id) {
                     f.river_path = Some(path);
+                    f.stream_order = Some(r.order);
+                    f.drainage_area_mi2 = Some(basin_mi2);
+                    f.discharge_index = Some(r.peak_discharge as f64);
+                    f.tributary_count = Some(r.tributary_count);
                 }
             }
             let _ = q;

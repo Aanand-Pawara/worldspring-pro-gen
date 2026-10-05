@@ -413,6 +413,10 @@ export interface Feature {
   detail?: string;
   /** World-space river centerline used only for the selected-river overlay. */
   river_path?: [number, number, number][];
+  stream_order?: number;
+  drainage_area_mi2?: number;
+  discharge_index?: number;
+  tributary_count?: number;
 }
 
 export interface Overlay {
