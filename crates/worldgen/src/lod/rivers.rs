@@ -16,7 +16,11 @@ use crate::core::rng::hash2;
 
 /// Channel width (ft) from discharge (mm·cells); matches the renderer's expectations.
 pub fn width_ft(q: f64) -> f64 {
-    (14.0 * libm::pow((q / 90_000.0).max(0.05), 0.6)).max(8.0)
+    // Downstream channel width follows discharge with an empirical power law. A ~0.5
+    // exponent is a useful large-scale approximation from USGS hydraulic-geometry work.
+    // Keep headwaters narrow enough to read as streams, while allowing major rivers to
+    // become dramatically wider after tributaries join.
+    (12.0 * libm::pow((q / 90_000.0).max(0.03), 0.52)).max(5.0)
 }
 
 fn depth_ft(width: f64) -> f64 {
@@ -156,7 +160,7 @@ impl RiverCurve {
         // Noise coordinates accumulate along the river (like the meander phase), so they
         // advance smoothly even where the width changes.
         let vary = 0.6 + 0.4 * gradient2(self.seed, phase / (3.0 * std::f64::consts::TAU), 0.37);
-        let amp = (0.32 * lambda * sinuosity * vary).min(0.3 * cell_ft);
+        let amp = (0.24 * lambda * sinuosity * vary).min(0.3 * cell_ft);
         let wphase = lerp(self.wphase[k], self.wphase[k1]);
         let wiggle = 1.2 * w * gradient2(self.seed ^ 0x55, wphase, 0.71);
         // Cell-scale drift: even small streams never run straight between T0 cells.
