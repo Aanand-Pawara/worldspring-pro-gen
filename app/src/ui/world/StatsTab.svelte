@@ -82,7 +82,7 @@
       {#each filteredSettlements.slice(0, 15) as f, i (f.id)}
         <button class="row" onclick={() => select(f)}>
           <span class="rank">{i + 1}</span>
-          <span class="icon"><Icon name={f.kind === 'village' ? 'home' : f.kind === 'town' ? 'building' : 'castle'} size={16} /></span>
+          <span class="icon"><Icon name={f.kind === 'village' ? 'tree' : f.kind === 'town' ? 'building' : 'castle'} size={16} /></span>
           <span class="name">{label(f)}<small>{f.detail?.split(',')[0] ?? f.kind}</small></span>
           <strong>{fmt(population(f))}</strong>
         </button>
