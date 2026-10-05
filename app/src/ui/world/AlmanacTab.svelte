@@ -105,6 +105,9 @@
     if (largestLandmass) out.push({ text: `${name(largestLandmass)} is the largest generated landmass by stored extent, about ${fmtMiles(areaSqMi(largestLandmass.extent_ft))} square miles.`, tag: 'GEOGRAPHY', feature: largestLandmass });
     if (highestWaterfall) out.push({ text: `${name(highestWaterfall)} has the greatest named waterfall drop at about ${fmt(drop(highestWaterfall))} ft.`, tag: 'WATER', feature: highestWaterfall });
     if (largestRange) out.push({ text: `${name(largestRange)} is the longest generated mountain-range feature by its stored extent.`, tag: 'TERRAIN', feature: largestRange });
+    if (rivers.length) out.push({ text: `${fmt(totalRiverMiles)} named river miles are mapped: ${fmt(oceanRivers.length)} reach the ocean, ${fmt(inlandLakeRivers.length)} end in inland lakes, and ${fmt(dryRivers.length)} fade into dry basins.`, tag: 'HYDROLOGY' });
+    if (lakeFedRivers.length || lakes.length) out.push({ text: `${fmt(lakeFedRivers.length)} named rivers begin from modeled lakes; ${fmt(terminalLakes.length)} lakes are terminal and ${fmt(flowThroughLakes.length)} are flow-through.`, tag: 'HYDROLOGY' });
+    if (highestOrderRiver) out.push({ text: `${name(highestOrderRiver)} reaches stream order ${highestOrderRiver.stream_order ?? 1}, with a modeled drainage basin of ${fmtMiles(highestOrderRiver.drainage_area_mi2 ?? 0)} square miles.`, tag: 'HYDROLOGY', feature: highestOrderRiver });
     if (longestRiver && settlementsNearLongestRiver.length) out.push({ text: `${fmt(settlementsNearLongestRiver.length)} settlements have generated label anchors within 50 miles of ${name(longestRiver)}.`, tag: 'RELATION', feature: longestRiver });
     if (highestPeak && settlementsNearHighestPeak.length) out.push({ text: `${fmt(settlementsNearHighestPeak.length)} settlements have generated label anchors within 50 miles of ${name(highestPeak)}.`, tag: 'RELATION', feature: highestPeak });
     if (largestSettlement && nearbyPeak) out.push({ text: `${name(largestSettlement)} is about ${fmtMiles(nearbyPeak.d)} miles from the named peak ${name(nearbyPeak.f)}.`, tag: 'RELATION', feature: largestSettlement });
@@ -203,6 +206,14 @@
         <div><span>Mountain ranges</span><b>{fmt(ranges.length)}</b></div>
         <div><span>Named rivers</span><b>{fmt(rivers.length)}</b></div>
         <div><span>Volcanoes</span><b>{fmt(volcanoes.length)}</b></div>
+        <div><span>Total named river miles</span><b>{fmtMiles(totalRiverMiles)} mi</b></div>
+        <div><span>Ocean rivers</span><b>{fmt(oceanRivers.length)}</b></div>
+        <div><span>Inland-lake rivers</span><b>{fmt(inlandLakeRivers.length)}</b></div>
+        <div><span>Dry rivers</span><b>{fmt(dryRivers.length)}</b></div>
+        <div><span>Lake-fed rivers</span><b>{fmt(lakeFedRivers.length)}</b></div>
+        <div><span>Terminal lakes</span><b>{fmt(terminalLakes.length)}</b></div>
+        <div><span>Flow-through lakes</span><b>{fmt(flowThroughLakes.length)}</b></div>
+        <div><span>Highest stream order</span><b>{fmt(highestOrderRiver?.stream_order ?? 0)}</b></div>
         <div><span>Total named river miles</span><b>{fmtMiles(totalRiverMiles)} mi</b></div>
         <div><span>Ocean rivers</span><b>{fmt(oceanRivers.length)}</b></div>
         <div><span>Inland-lake rivers</span><b>{fmt(inlandLakeRivers.length)}</b></div>
