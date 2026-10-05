@@ -2,7 +2,7 @@
 
 **A whole fantasy world for your tabletop game, from the continent down to the battlemap, in your browser.**
 
-**[Open Worldspring →](https://dun-john.github.io/worldspring/)**
+**[Open Worldspring →](https://aanand-pawara.github.io/worldspring-pro-gen/)**
 
 ![Zooming from the whole continent down into an inn](docs/media/zoom.gif)
 
@@ -63,6 +63,14 @@ made with an older one, you choose: **open it as it was made** (exactly as befor
 - Game rules aren't built in: play mode works with any system.
 - Worldspring also has a local agent server (MCP tools for AI assistants, see [docs/AGENT.md](docs/AGENT.md)) that
   runs only on your own computer; it isn't part of the website.
+
+## Publishing your fork
+
+This fork publishes its own GitHub Pages site at **https://aanand-pawara.github.io/worldspring-pro-gen/**.
+
+Pushes to `main` publish the site automatically through GitHub Actions. The existing `npm run publish` command also publishes locally and keeps previous generator versions under `v<N>/`.
+
+For GitHub Pages, set the repository's Pages source to the `gh-pages` branch and the root (`/`) directory.
 
 ## Running it yourself
 
