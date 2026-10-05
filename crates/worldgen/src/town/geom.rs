@@ -1,0 +1,240 @@
+//! Small 2D polygon toolkit for settlement layouts (all f64 ft, counter-clockwise or not —
+//! functions that care say so). Convex polygons are the common case: Voronoi patches and the
+//! lots cut from them stay convex.
+
+pub type P = [f64; 2];
+
+#[inline]
+pub fn sub(a: P, b: P) -> P {
+    [a[0] - b[0], a[1] - b[1]]
+}
+#[inline]
+pub fn add(a: P, b: P) -> P {
+    [a[0] + b[0], a[1] + b[1]]
+}
+#[inline]
+pub fn mul(a: P, s: f64) -> P {
+    [a[0] * s, a[1] * s]
+}
+#[inline]
+pub fn dot(a: P, b: P) -> f64 {
+    a[0] * b[0] + a[1] * b[1]
+}
+#[inline]
+pub fn cross(a: P, b: P) -> f64 {
+    a[0] * b[1] - a[1] * b[0]
+}
+#[inline]
+pub fn len(a: P) -> f64 {
+    crate::core::sqrt(dot(a, a))
+}
+#[inline]
+pub fn dist(a: P, b: P) -> f64 {
+    len(sub(a, b))
+}
+#[inline]
+pub fn lerp(a: P, b: P, t: f64) -> P {
+    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+}
+
+/// Signed area (positive when counter-clockwise in a y-up frame).
+pub fn area(poly: &[P]) -> f64 {
+    let n = poly.len();
+    (0..n).map(|i| cross(poly[i], poly[(i + 1) % n])).sum::<f64>() * 0.5
+}
+
+pub fn centroid(poly: &[P]) -> P {
+    let n = poly.len();
+    let a = area(poly);
+    if a.abs() < 1e-9 {
+        let s = poly.iter().fold([0.0, 0.0], |acc, p| add(acc, *p));
+        return mul(s, 1.0 / n.max(1) as f64);
+    }
+    let mut c = [0.0, 0.0];
+    for i in 0..n {
+        let (p, q) = (poly[i], poly[(i + 1) % n]);
+        let f = cross(p, q);
+        c[0] += (p[0] + q[0]) * f;
+        c[1] += (p[1] + q[1]) * f;
+    }
+    mul(c, 1.0 / (6.0 * a))
+}
+
+pub fn contains(poly: &[P], p: P) -> bool {
+    let n = poly.len();
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (a, b) = (poly[i], poly[j]);
+        if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Distance from `p` to segment `ab`.
+pub fn seg_dist(p: P, a: P, b: P) -> f64 {
+    let ab = sub(b, a);
+    let t = (dot(sub(p, a), ab) / dot(ab, ab).max(1e-12)).clamp(0.0, 1.0);
+    dist(p, add(a, mul(ab, t)))
+}
+
+/// A polygon whose edges carry a label (edge i runs from vertex i to i + 1).
+#[derive(Clone, Debug)]
+pub struct Labeled {
+    pub pts: Vec<P>,
+    pub labels: Vec<i32>,
+}
+
+/// Keep the part of a convex polygon where `dot(p, n) <= c`; the new edge along the line gets
+/// `label`. Works for any simple polygon clipped by a half-plane, keeping one piece.
+pub fn clip(poly: &Labeled, n: P, c: f64, label: i32) -> Labeled {
+    let m = poly.pts.len();
+    let mut out = Labeled { pts: Vec::with_capacity(m + 1), labels: Vec::with_capacity(m + 1) };
+    for i in 0..m {
+        let (a, b) = (poly.pts[i], poly.pts[(i + 1) % m]);
+        let (da, db) = (dot(a, n) - c, dot(b, n) - c);
+        if da <= 0.0 {
+            out.pts.push(a);
+            out.labels.push(poly.labels[i]);
+        }
+        if (da <= 0.0) != (db <= 0.0) {
+            let t = da / (da - db);
+            out.pts.push(lerp(a, b, t));
+            // Leaving the kept side starts the cut edge (to the entry point); entering
+            // continues the rest of the original edge.
+            out.labels.push(if da <= 0.0 { label } else { poly.labels[i] });
+        }
+    }
+    out
+}
+
+/// Keep the part of a plain polygon where `dot(p, n) <= c`.
+pub fn clip_plain(poly: &[P], n: P, c: f64) -> Vec<P> {
+    let lp = Labeled { pts: poly.to_vec(), labels: vec![-1; poly.len()] };
+    clip(&lp, n, c, -1).pts
+}
+
+/// Shrink a convex polygon by moving every edge inward by its own distance (`d[i]` for edge
+/// i). Returns an empty polygon when it collapses.
+pub fn inset(poly: &[P], d: &[f64]) -> Vec<P> {
+    let m = poly.len();
+    if m < 3 {
+        return Vec::new();
+    }
+    let ccw = area(poly) > 0.0;
+    let mut cur = poly.to_vec();
+    for i in 0..m {
+        let (a, b) = (poly[i], poly[(i + 1) % m]);
+        let e = sub(b, a);
+        let l = len(e);
+        if l < 1e-9 {
+            continue;
+        }
+        // Outward normal.
+        let nrm = if ccw { [e[1] / l, -e[0] / l] } else { [-e[1] / l, e[0] / l] };
+        cur = clip_plain(&cur, nrm, dot(a, nrm) - d[i]);
+        if cur.len() < 3 {
+            return Vec::new();
+        }
+    }
+    cur
+}
+
+/// Split a convex polygon by the line through `p` with direction `dir`.
+pub fn split(poly: &[P], p: P, dir: P) -> (Vec<P>, Vec<P>) {
+    let n = [-dir[1], dir[0]];
+    let c = dot(p, n);
+    (clip_plain(poly, n, c), clip_plain(poly, mul(n, -1.0), -c))
+}
+
+/// Longest edge direction (unit) of a polygon — lots are cut across it.
+pub fn main_axis(poly: &[P]) -> P {
+    let m = poly.len();
+    let mut best = ([1.0, 0.0], 0.0);
+    for i in 0..m {
+        let e = sub(poly[(i + 1) % m], poly[i]);
+        let l = len(e);
+        if l > best.1 {
+            best = (mul(e, 1.0 / l), l);
+        }
+    }
+    best.0
+}
+
+/// Extent of a polygon along a unit direction.
+pub fn extent(poly: &[P], dir: P) -> (f64, f64) {
+    poly.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(dot(*p, dir)), hi.max(dot(*p, dir))))
+}
+
+/// Minimum-area oriented bounding box of a convex polygon (edge-aligned, rotating calipers).
+pub struct Obb {
+    /// Unit direction of the long side.
+    pub axis: P,
+    pub long: f64,
+    pub short: f64,
+}
+
+pub fn obb(poly: &[P]) -> Obb {
+    let m = poly.len();
+    let mut best = Obb { axis: [1.0, 0.0], long: 0.0, short: 0.0 };
+    let mut best_area = f64::MAX;
+    for i in 0..m {
+        let e = sub(poly[(i + 1) % m], poly[i]);
+        let l = len(e);
+        if l < 1e-9 {
+            continue;
+        }
+        let u = mul(e, 1.0 / l);
+        let v = [-u[1], u[0]];
+        let (a0, a1) = extent(poly, u);
+        let (b0, b1) = extent(poly, v);
+        let (w, h) = (a1 - a0, b1 - b0);
+        if w * h < best_area {
+            best_area = w * h;
+            best = if w >= h { Obb { axis: u, long: w, short: h } } else { Obb { axis: v, long: h, short: w } };
+        }
+    }
+    best
+}
+
+/// Drop repeated and collinear vertices (clipping leaves them where a vertex lies on the
+/// cut line), so vertex counts mean real corners.
+pub fn clean(poly: &[P]) -> Vec<P> {
+    let mut pts: Vec<P> = Vec::with_capacity(poly.len());
+    for p in poly {
+        if pts.last().is_none_or(|q| dist(*q, *p) > 0.05) {
+            pts.push(*p);
+        }
+    }
+    while pts.len() > 1 && dist(pts[0], *pts.last().unwrap()) <= 0.05 {
+        pts.pop();
+    }
+    let mut changed = true;
+    while changed && pts.len() > 3 {
+        changed = false;
+        let m = pts.len();
+        for i in 0..m {
+            let (a, b, c) = (pts[(i + m - 1) % m], pts[i], pts[(i + 1) % m]);
+            let (ab, bc) = (sub(b, a), sub(c, b));
+            if cross(ab, bc).abs() <= 1e-3 * len(ab) * len(bc) {
+                pts.remove(i);
+                changed = true;
+                break;
+            }
+        }
+    }
+    pts
+}
+
+/// Regular polygon approximating a circle.
+pub fn circle(c: P, r: f64, n: usize) -> Vec<P> {
+    (0..n)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / n as f64;
+            [c[0] + r * libm::cos(a), c[1] + r * libm::sin(a)]
+        })
+        .collect()
+}

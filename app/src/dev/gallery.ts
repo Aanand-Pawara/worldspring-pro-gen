@@ -1,0 +1,157 @@
+// Sprite gallery (`?gallery=1`): every piece of art the map draws, labelled, to choose what to
+// redraw. `&kinds=15,16` shows only those battlemap kinds (and no furniture or props), `&sq=96` draws
+// them at that many px a square (default 48). `&items=bed,chair` shows only those furniture and props
+// (each in both orientations; no battlemap objects), `&sq=` then sizing their squares (default 44). Battlemap objects come from the atlas (all variants); building furniture and
+// underground props are drawn by InteriorLayer exactly as in the app, one per little room.
+import { Application, Container, Graphics, Sprite, Text, type TextStyleOptions } from 'pixi.js';
+import init, { battlemap_catalog_json } from '../gen/pkg/worldgen_wasm.js';
+import type { KindInfo } from '../gen/client';
+import type { Interior, InteriorItem } from '../gen/protocol';
+import { buildAtlas, PX, VARIANTS } from '../render/atlas';
+import { InteriorLayer } from '../render/InteriorLayer';
+
+/** Building furniture (`interior::item_info`), with a typical size in squares. */
+const FURNITURE: [string, number, number][] = [
+  ['bed', 1, 2], ['bed', 2, 2], ['cot', 1, 2], ['chest', 1, 1], ['wardrobe', 1, 1], ['sideboard', 2, 1], ['shelf', 2, 1], ['bookcase', 2, 1],
+  ['barrel', 1, 1], ['keg_rack', 2, 1], ['crate', 1, 1], ['crate', 2, 2], ['table', 1, 1], ['table', 2, 1], ['long_table', 3, 1], ['desk', 2, 1],
+  ['display', 2, 1], ['chair', 1, 1], ['bench', 2, 1], ['pew', 3, 1], ['pew', 2, 1], ['couch', 2, 1], ['booth_table', 1, 1], ['booth_seat', 1, 1],
+  ['bar', 3, 1], ['counter', 2, 1], ['hearth', 2, 1], ['oven', 1, 1], ['forge', 2, 2], ['anvil', 1, 1], ['vat', 2, 2],
+  ['cauldron', 1, 1], ['workbench', 2, 1], ['alchemy_bench', 2, 1], ['weapon_rack', 1, 1], ['weapon_rack', 2, 1], ['rack', 1, 2], ['cage', 2, 2], ['cage', 1, 1],
+  ['altar', 2, 1], ['statue', 1, 1], ['pillar', 1, 1], ['sarcophagus', 1, 2], ['bell', 2, 2], ['throne', 1, 1], ['rug', 2, 3], ['rug', 2, 2], ['rug', 2, 1],
+  ['bath', 1, 2], ['bath', 2, 2], ['bucket', 1, 1], ['trapdoor', 1, 1], ['winch', 1, 1], ['telescope', 2, 2], ['barricade', 2, 1],
+  ['stage', 3, 2], ['spiral_stair', 1, 1], ['link_down', 1, 1],
+];
+
+/** Underground props (`under::item` and the ways in and out), with their sizes in squares. */
+const UNDER: [string, number, number][] = [
+  ['exit', 1, 1], ['up', 1, 1], ['down', 1, 1], ['tunnel', 1, 1], ['trapdoor', 1, 1], ['ladder', 1, 1], ['pipe', 1, 1],
+  ['trap', 1, 1], ['cave_in', 1, 1], ['pit', 2, 2], ['well', 1, 1], ['stalagmite', 1, 1], ['rock_column', 1, 1], ['boulder', 2, 2],
+  ['crystal', 1, 1], ['fungus', 1, 1], ['mushroom', 1, 1], ['web', 1, 1], ['cobweb', 1, 1], ['guano', 2, 2], ['moss', 1, 1],
+  ['pool', 2, 2], ['obsidian', 1, 1], ['basalt', 1, 1], ['vent', 1, 1], ['sulfur', 1, 1], ['scorched', 1, 2], ['glass_pool', 2, 2],
+  ['bones', 1, 1], ['skeleton', 1, 2], ['skulls', 1, 1], ['campfire', 1, 1], ['rubble', 1, 1], ['debris', 1, 1], ['rat_nest', 1, 1], ['nest', 1, 1], ['ice', 1, 1], ['ice_sheet', 2, 2],
+  ['timber', 1, 1], ['rail', 1, 1], ['ore_cart', 1, 1], ['ore_vein', 1, 1], ['tools', 1, 1], ['lantern', 1, 1], ['winch', 1, 1],
+  ['powder', 1, 1], ['bedroll', 1, 2], ['cot', 1, 2], ['urn', 1, 1], ['brazier', 1, 1], ['candles', 1, 1], ['sarcophagus', 1, 2],
+  ['effigy', 1, 2], ['coffin', 1, 2], ['niche', 1, 1], ['offering', 1, 1], ['chains', 1, 1], ['sconce', 1, 1], ['banner', 1, 1],
+  ['iron_maiden', 1, 1], ['stocks', 2, 1], ['cage', 2, 2], ['rack', 1, 2], ['weapon_rack', 1, 1], ['chest', 1, 1], ['hoard', 1, 1],
+  ['dais', 3, 2], ['fountain', 2, 2], ['statue', 1, 1], ['pillar', 1, 1], ['sacks', 1, 1], ['bookshelf', 1, 2], ['rug', 2, 3],
+  ['table', 1, 2], ['crate', 1, 1], ['barrel', 1, 1], ['altar', 2, 1], ['glyph', 2, 2],
+];
+
+const LABEL: TextStyleOptions = { fontFamily: 'Georgia, serif', fontSize: 13, fill: 0x2a2219 };
+const HEAD: TextStyleOptions = { fontFamily: 'Georgia, serif', fontSize: 22, fill: 0x1d1a14, fontWeight: 'bold' };
+/** Screen px per 5-ft square for furniture and props. */
+const ITEM_SQ = 44;
+const SLOT = 4;
+
+/** One room per item in a grid of `cols` (each SLOT squares, rock between them). */
+function sampler(id: string, fn: string, items: [string, number, number][], cols: number): { it: Interior; spots: [string, number, number][] } {
+  const rows = Math.ceil(items.length / cols);
+  const [nx, ny] = [cols * (SLOT + 1) + 1, rows * (SLOT + 1) + 1];
+  const cells = new Array<number>(nx * ny).fill(-1);
+  const furniture: InteriorItem[] = [];
+  const rooms: Interior['levels'][number]['rooms'] = [];
+  const spots: [string, number, number][] = [];
+  items.forEach(([kind, w, h], k) => {
+    const [x0, y0] = [1 + (k % cols) * (SLOT + 1), 1 + Math.floor(k / cols) * (SLOT + 1)];
+    for (let j = 0; j < SLOT; j++) for (let i = 0; i < SLOT; i++) cells[(y0 + j) * nx + x0 + i] = k;
+    rooms.push({ kind: ' ', squares: SLOT * SLOT, raise_ft: 0, center: [x0 + SLOT / 2, y0 + SLOT / 2] });
+    // Against the room's top wall, centred (props on a wall find the rock behind them).
+    const x = x0 + Math.floor((SLOT - w) / 2);
+    furniture.push({ kind, name: kind, x, y: y0, w, h, cover: 0, blocks_move: false, height_ft: 3 });
+    spots.push([w === 1 && h === 1 && kind === 'table' ? 'table (round)' : `${kind.replace(/_/g, ' ')}${w * h > 1 ? ` ${w}×${h}` : ''}`, x0, y0 + SLOT]);
+  });
+  const level = { z: -1, name: '', elevation_ft: 0, cells, rooms, walls: [], doors: [], windows: [], furniture, roof: false, has_stairs: false, natural: false };
+  return { it: { id, settlement: 0, building: 0, name: null, function: fn, origin: [0, 0], axis: [1, 0], across: [0, 1], nx, ny, levels: [level], entry_level: 0, stairs: [0, 0, 0, 0] }, spots };
+}
+
+export async function runGallery(target: HTMLElement) {
+  // The map page is a fixed full-screen canvas; this one scrolls.
+  document.documentElement.style.overflow = 'auto';
+  document.body.style.cssText = 'background:#efe6d2;overflow:auto;height:auto;position:static';
+  target.style.cssText = 'position:static;height:auto';
+  await init();
+  const catalog = JSON.parse(battlemap_catalog_json()) as KindInfo[];
+  const app = new Application();
+  const width = Math.max(1200, window.innerWidth - 20);
+  await app.init({ width, height: 400, background: 0xefe6d2, antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true });
+  InteriorLayer.renderer = app.renderer;
+  target.appendChild(app.canvas);
+  const root = new Container();
+  let y = 16;
+  const head = (s: string) => {
+    const t = new Text({ text: s, style: HEAD });
+    t.position.set(16, y);
+    root.addChild(t);
+    y += 40;
+  };
+
+  // Battlemap objects: every atlas frame, all variants, at about 48 px a square.
+  const query = new URLSearchParams(location.search);
+  const only = query.get('kinds')?.split(',').map(Number);
+  const pick = query.get('items')?.split(',');
+  const sq = Number(query.get('sq')) || 48;
+  if (!pick) {
+    head(`Battlemap objects (atlas, ${catalog.length} kinds × ${VARIANTS} variants)`);
+    const atlas = buildAtlas(app.renderer, catalog);
+    const scale = sq / PX;
+    const cell = Math.max(104, Math.ceil((sq / 48) * 104));
+    const cellW = 4 * cell + 24;
+    const per = Math.max(1, Math.floor((width - 32) / cellW));
+    let rowH = 0;
+    catalog
+      .filter((info) => !only || only.includes(info.id))
+      .forEach((info, k) => {
+        if (k % per === 0 && k) {
+          y += rowH + 30;
+          rowH = 0;
+        }
+        const x0 = 16 + (k % per) * cellW;
+        for (let v = 0; v < VARIANTS; v++) {
+          const s = new Sprite(atlas.frames[info.id][v]);
+          s.scale.set(Math.min(scale, (cell - 4) / s.texture.width));
+          s.anchor.set(0.5);
+          s.position.set(x0 + cell / 2 + v * cell, y + cell / 2);
+          root.addChild(s);
+        }
+        const t = new Text({ text: `${info.id} ${info.name.replace(/_/g, ' ')} (r ${info.radius})`, style: LABEL });
+        t.position.set(x0, y + cell + 2);
+        root.addChild(t);
+        rowH = cell + 2;
+      });
+    y += rowH + 50;
+  }
+
+  // Building furniture and underground props, drawn as in the app.
+  const SQ = pick ? Number(query.get('sq')) || ITEM_SQ : ITEM_SQ;
+  const chosen = (list: [string, number, number][]) =>
+    pick ? list.filter(([k]) => pick.includes(k)).flatMap(([k, w, h]): [string, number, number][] => (w === h ? [[k, w, h]] : [[k, w, h], [k, h, w]])) : list;
+  const cols = Math.max(4, Math.floor((width - 32) / ((SLOT + 1) * SQ)));
+  for (const [title, id, fn, items] of [
+    ['Building furniture (item atlas)', 'b:gallery', 'house', FURNITURE],
+    ['Underground props (item atlas)', 'u:gallery', 'dungeon', UNDER],
+  ] as const) {
+    if (only) break;
+    const list = chosen(items as unknown as [string, number, number][]);
+    if (!list.length) continue;
+    head(title);
+    const { it, spots } = sampler(id, fn, list, cols);
+    const layer = new InteriorLayer(it, 0, false, false, { player: false, doors: null });
+    const holder = new Container();
+    holder.addChild(layer.container);
+    holder.scale.set(SQ);
+    holder.position.set(16, y);
+    // The layer dims the map behind it: none here.
+    layer.container.children[0].visible = false;
+    root.addChild(holder);
+    for (const [label, gx, gy] of spots) {
+      const t = new Text({ text: label, style: { ...LABEL, fill: id.startsWith('u') ? 0xf3ead8 : 0x2a2219, fontSize: 12 } });
+      t.position.set(16 + gx * SQ + 2, y + (gy - 0.95) * SQ);
+      root.addChild(t);
+    }
+    y += it.ny * SQ + 40;
+  }
+
+  const bg = new Graphics().rect(0, 0, width, y).fill(0xefe6d2);
+  app.stage.addChild(bg, root);
+  app.renderer.resize(width, y);
+}

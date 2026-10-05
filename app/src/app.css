@@ -1,0 +1,375 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #8aa0a8;
+}
+
+/* Worldspring's look, shared by the map's window and the players': parchment panels and ink.
+   Components use these tokens and the `ws-` classes instead of their own copies. Layout rules
+   live under `[data-layout]`, which only the map's window sets. */
+:root {
+  --paper: rgba(243, 236, 216, 0.96);
+  --paper-solid: #f3ecd8;
+  --field: #fbf7ec;
+  --btn: #e6dcc2;
+  --btn-hover: #e2d5b0;
+  --btn-on: #cdbb8c;
+  --ink: #2b241d;
+  --ink-2: #5a4a36;
+  --ink-3: #7a6a55;
+  --line: #3a322a;
+  --line-soft: #b9a987;
+  --line-field: #8a7a60;
+  --line-faint: rgba(58, 50, 42, 0.2);
+  --accent: #5a4632;
+  --accent-ink: #f5ecd6;
+  --gold: #b45309;
+  --danger: #8b2e2e;
+  --warn: #9a3412;
+  --ok: #3f6212;
+  --radius: 6px;
+  --radius-sm: 4px;
+  --shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.3);
+  --font: Georgia, 'Times New Roman', serif;
+  --mono: ui-monospace, Consolas, monospace;
+  /* The height of a button, a field or a row you can tap. */
+  --tap: 28px;
+  /* Layers over the map. */
+  --z-ring: 5;
+  --z-hud: 10;
+  --z-card: 12;
+  --z-dock: 15;
+  --z-bar: 16;
+  --z-chip: 17;
+  --z-search: 20;
+  --z-toast: 25;
+  --z-menu: 30;
+  --z-overlay: 40;
+  --z-progress: 45;
+}
+
+@media (pointer: coarse) {
+  :root {
+    --tap: 44px;
+  }
+}
+
+.ws-panel {
+  box-sizing: border-box;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font: 13px/1.45 var(--font);
+}
+
+.ws-btn {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: var(--tap);
+  padding: 0 10px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--btn);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ws-btn:hover:not(:disabled) {
+  background: var(--btn-hover);
+}
+.ws-btn.primary {
+  background: var(--accent);
+  border-color: var(--line);
+  color: var(--accent-ink);
+  font-weight: bold;
+}
+.ws-btn.primary:hover:not(:disabled) {
+  background: #4a3826;
+}
+.ws-btn.danger {
+  background: var(--danger);
+  border-color: #6b1f1f;
+  color: #fff;
+}
+.ws-btn.danger:hover:not(:disabled) {
+  background: #7a2525;
+}
+.ws-btn.quiet {
+  background: transparent;
+  border-color: transparent;
+}
+.ws-btn.quiet:hover:not(:disabled) {
+  background: var(--btn-hover);
+}
+.ws-btn.block {
+  display: flex;
+  width: 100%;
+}
+.ws-btn:disabled,
+.ws-icon-btn:disabled,
+.ws-seg > button:disabled,
+.ws-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ws-icon-btn {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--tap);
+  height: var(--tap);
+  padding: 0;
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.ws-icon-btn:hover:not(:disabled) {
+  background: var(--btn-hover);
+}
+.ws-icon-btn.on,
+.ws-icon-btn[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* Segmented buttons: one choice of a few, shown side by side. */
+.ws-seg {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--btn);
+}
+.ws-seg > button {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--tap);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 6px;
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--line-soft);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ws-seg > button:first-child {
+  border-left: none;
+}
+.ws-seg > button:hover:not(:disabled) {
+  background: var(--btn-hover);
+}
+.ws-seg > button.on,
+.ws-seg > button[aria-pressed='true'],
+.ws-seg > button[aria-selected='true'] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.ws-input {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: calc(var(--tap) - 2px);
+  padding: 2px 6px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--field);
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-sm);
+}
+textarea.ws-input {
+  width: 100%;
+  resize: vertical;
+  padding: 4px 6px;
+}
+.ws-input::placeholder {
+  color: var(--ink-3);
+  opacity: 0.8;
+}
+
+/* A label over its control. */
+.ws-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.ws-field > .ws-input,
+.ws-field > textarea,
+.ws-field > select {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.ws-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ws-chip {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: calc(var(--tap) - 6px);
+  padding: 0 9px;
+  font: 12px var(--font);
+  color: var(--ink);
+  background: var(--btn);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ws-chip:hover:not(:disabled) {
+  background: var(--btn-hover);
+}
+.ws-chip.on,
+.ws-chip[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--line);
+  color: var(--accent-ink);
+}
+
+/* A switch: a checkbox drawn as a sliding toggle. */
+input[type='checkbox'].ws-switch {
+  appearance: none;
+  flex: none;
+  position: relative;
+  width: 30px;
+  height: 17px;
+  margin: 0;
+  border-radius: 999px;
+  background: #c9bb9a;
+  border: 1px solid var(--line-field);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+input[type='checkbox'].ws-switch::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--field);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 0.12s;
+}
+input[type='checkbox'].ws-switch:checked {
+  background: var(--accent);
+}
+input[type='checkbox'].ws-switch:checked::after {
+  transform: translateX(13px);
+}
+
+.ws-kbd,
+kbd.ws-kbd {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0 4px;
+  font: 10px/1.6 var(--mono);
+  text-align: center;
+  color: var(--ink-2);
+  background: var(--field);
+  border: 1px solid var(--line-soft);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+}
+@media (pointer: coarse) {
+  .ws-kbd {
+    display: none;
+  }
+}
+
+.ws-muted {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.ws-hint {
+  color: var(--ink-2);
+  font-size: 12px;
+  font-style: italic;
+}
+.ws-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+}
+
+/* A group that folds away: <details class="ws-group"><summary>…</summary>…</details>. */
+details.ws-group {
+  border-top: 1px solid var(--line-faint);
+}
+details.ws-group > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--tap);
+  cursor: pointer;
+  list-style: none;
+  font-weight: bold;
+  user-select: none;
+}
+details.ws-group > summary::-webkit-details-marker {
+  display: none;
+}
+details.ws-group > summary::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin: 0 3px 0 2px;
+  border-right: 1.5px solid var(--ink-2);
+  border-bottom: 1.5px solid var(--ink-2);
+  transform: rotate(-45deg);
+  transition: transform 0.12s;
+}
+details.ws-group[open] > summary::before {
+  transform: rotate(45deg);
+}
+details.ws-group > .ws-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0 10px;
+}
+
+input[type='range'],
+input[type='checkbox']:not(.ws-switch),
+input[type='radio'] {
+  accent-color: var(--accent);
+}
+
+.ws-btn:focus-visible,
+.ws-icon-btn:focus-visible,
+.ws-seg > button:focus-visible,
+.ws-chip:focus-visible,
+.ws-input:focus-visible,
+input[type='checkbox'].ws-switch:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 1px;
+}

@@ -1,0 +1,219 @@
+// The sketch being drawn (before it is generated): tools and their settings, freehand strokes
+// from pointer input (thinned while drawing, simplified when done), erasing and undo.
+import type { Stroke } from '../gen/protocol';
+
+export const MI = 5280;
+
+/** Editor tools; each makes strokes of one kind (`erase` removes them). */
+export type EditTool = 'coast' | 'land' | 'sea' | 'range' | 'river' | 'biome' | 'pin' | 'erase';
+
+export type PinTier = 'metropolis' | 'city' | 'town' | 'village';
+
+export interface ToolSettings {
+  tool: EditTool;
+  /** Brush radius (mi) per tool: band half-width, a range's half-width, a river's valley. */
+  radiusMi: Record<string, number>;
+  /** 0..1: a range's height, a river's size. */
+  strength: number;
+  /** Exact edges instead of natural ones. */
+  hard: boolean;
+  biome: string;
+  /** Biome strokes: fill the drawn outline instead of brushing along the line. */
+  fill: boolean;
+  tier: PinTier;
+  /** The next pin's name (empty: generated). */
+  name: string;
+}
+
+export const DEFAULT_SETTINGS: ToolSettings = {
+  tool: 'coast',
+  radiusMi: { land: 15, sea: 10, range: 15, river: 3, biome: 20 },
+  strength: 0.7,
+  hard: false,
+  biome: 'temperate_forest',
+  fill: true,
+  tier: 'town',
+  name: '',
+};
+
+/** Pixels a pointer must move before a new point is added. */
+const STEP_PX = 4;
+/** Simplification tolerance (px at the zoom it was drawn at). */
+const SIMPLIFY_PX = 1.5;
+
+function segDist(p: [number, number], a: [number, number], b: [number, number]): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const l2 = dx * dx + dy * dy;
+  const t = l2 > 0 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
+  return Math.hypot(a[0] + t * dx - p[0], a[1] + t * dy - p[1]);
+}
+
+/** Ramer–Douglas–Peucker. */
+function simplify(pts: [number, number][], tol: number): [number, number][] {
+  if (pts.length < 3) return pts;
+  const keep = new Uint8Array(pts.length);
+  keep[0] = keep[pts.length - 1] = 1;
+  const stack: [number, number][] = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [i, j] = stack.pop()!;
+    let best = -1;
+    let bestD = tol;
+    for (let k = i + 1; k < j; k++) {
+      const d = segDist(pts[k], pts[i], pts[j]);
+      if (d > bestD) [best, bestD] = [k, d];
+    }
+    if (best >= 0) {
+      keep[best] = 1;
+      stack.push([i, best], [best, j]);
+    }
+  }
+  return pts.filter((_, k) => keep[k]);
+}
+
+/** Strokes stretched with the map: x by `sx`, y by `sy`, brush radii by their geometric mean
+ * (a drawn continent stays the same share of a resized map). */
+export function scaleStrokes(strokes: Stroke[], sx: number, sy: number): Stroke[] {
+  if (sx === 1 && sy === 1) return strokes;
+  const r = Math.sqrt(sx * sy);
+  return strokes.map((s) => ({
+    ...s,
+    pts: s.pts.map((p) => [Math.round(p[0] * sx), Math.round(p[1] * sy)] as [number, number]),
+    ...(s.radius_ft !== undefined ? { radius_ft: Math.round(s.radius_ft * r) } : {}),
+  }));
+}
+
+/** Whether strokes decide the land mask (any land or sea drawn): the land slider is moot. */
+export const drawsLand = (strokes: Stroke[]) => strokes.some((s) => s.tool === 'land' || s.tool === 'sea');
+
+/** Distance (ft) from a point to a stroke (0 inside a filled outline). */
+export function strokeDistance(s: Stroke, p: [number, number]): number {
+  if (s.closed && s.pts.length >= 3) {
+    let inside = false;
+    for (let i = 0, j = s.pts.length - 1; i < s.pts.length; j = i++) {
+      const [a, b] = [s.pts[i], s.pts[j]];
+      if (a[1] > p[1] !== b[1] > p[1] && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
+    }
+    if (inside) return 0;
+  }
+  if (s.pts.length === 1) return Math.hypot(s.pts[0][0] - p[0], s.pts[0][1] - p[1]);
+  let d = Infinity;
+  for (let k = 1; k < s.pts.length; k++) d = Math.min(d, segDist(p, s.pts[k - 1], s.pts[k]));
+  if (s.closed && s.pts.length > 2) d = Math.min(d, segDist(p, s.pts[s.pts.length - 1], s.pts[0]));
+  return d;
+}
+
+export class Sketcher {
+  strokes: Stroke[] = [];
+  /** The stroke being drawn. */
+  drawing: Stroke | null = null;
+  settings: ToolSettings = structuredClone(DEFAULT_SETTINGS);
+  /** Called when the strokes change (not while one is being drawn). */
+  onChange: () => void = () => {};
+  /** Called while a stroke is drawn (for redrawing). */
+  onDraw: () => void = () => {};
+  private undoStack: Stroke[][] = [];
+  private ppf = 1;
+
+  /** Start over from these strokes (the world's sketch). */
+  load(strokes: Stroke[]) {
+    this.strokes = structuredClone(strokes);
+    this.undoStack = [];
+    this.drawing = null;
+  }
+
+  get canUndo(): boolean {
+    return this.undoStack.length > 0;
+  }
+
+  /** Pointer pressed at world (x, y), at `ppf` pixels per foot. */
+  down(x: number, y: number, ppf: number) {
+    this.ppf = ppf;
+    const t = this.settings;
+    if (t.tool === 'erase') {
+      // The nearest stroke within a dozen pixels (pins and lines first: they sit on areas).
+      let best = -1;
+      let bestD = 12 / ppf;
+      this.strokes.forEach((s, k) => {
+        const d = strokeDistance(s, [x, y]) + (s.closed ? 6 / ppf : 0);
+        if (d <= bestD) [best, bestD] = [k, d];
+      });
+      if (best >= 0) this.commit(this.strokes.filter((_, k) => k !== best));
+      return;
+    }
+    if (t.tool === 'pin') {
+      const name = t.name.trim();
+      this.commit([...this.strokes, { tool: 'pin', pts: [[Math.round(x), Math.round(y)]], tier: t.tier, ...(name ? { name } : {}) }]);
+      this.settings.name = '';
+      return;
+    }
+    const tool = t.tool === 'coast' ? 'land' : t.tool;
+    const closed = t.tool === 'coast' || (t.tool === 'biome' && t.fill);
+    this.drawing = {
+      tool,
+      pts: [[x, y]],
+      ...(closed ? { closed } : {}),
+      radius_ft: (t.radiusMi[tool] ?? 10) * MI,
+      ...(tool === 'range' || tool === 'river' ? { strength: t.strength } : {}),
+      ...(t.hard && tool !== 'range' && tool !== 'river' ? { hard: true } : {}),
+      ...(tool === 'biome' ? { biome: t.biome } : {}),
+    };
+    this.onDraw();
+  }
+
+  move(x: number, y: number) {
+    const d = this.drawing;
+    if (!d) return;
+    const last = d.pts[d.pts.length - 1];
+    if (Math.hypot(x - last[0], y - last[1]) * this.ppf < STEP_PX) return;
+    d.pts.push([x, y]);
+    this.onDraw();
+  }
+
+  up() {
+    const d = this.drawing;
+    this.drawing = null;
+    if (!d) return;
+    let pts = simplify(d.pts, SIMPLIFY_PX / this.ppf).map((p) => [Math.round(p[0] / 10) * 10, Math.round(p[1] / 10) * 10] as [number, number]);
+    if (pts.length > 4000) pts = pts.filter((_, k) => k % Math.ceil(pts.length / 4000) === 0);
+    // A closed outline needs an area; a line, two points (a click makes a round brush dab).
+    if (d.closed && pts.length < 3) {
+      this.onDraw();
+      return;
+    }
+    if (pts.length === 1 && !d.closed) pts = [pts[0], [pts[0][0] + 10, pts[0][1]]];
+    this.commit([...this.strokes, { ...d, pts }]);
+  }
+
+  cancel() {
+    this.drawing = null;
+    this.onDraw();
+  }
+
+  /** The map was resized: stretch every stroke (and the undo history) with it. */
+  rescale(sx: number, sy: number) {
+    if (sx === 1 && sy === 1) return;
+    this.strokes = scaleStrokes(this.strokes, sx, sy);
+    this.undoStack = this.undoStack.map((s) => scaleStrokes(s, sx, sy));
+    this.drawing = null;
+    this.onChange();
+  }
+
+  undo() {
+    const prev = this.undoStack.pop();
+    if (!prev) return;
+    this.strokes = prev;
+    this.onChange();
+  }
+
+  clear() {
+    if (this.strokes.length) this.commit([]);
+  }
+
+  private commit(next: Stroke[]) {
+    this.undoStack.push(this.strokes);
+    if (this.undoStack.length > 200) this.undoStack.shift();
+    this.strokes = next;
+    this.onChange();
+  }
+}

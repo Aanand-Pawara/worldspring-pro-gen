@@ -1,0 +1,11 @@
+/target
+node_modules/
+/app/dist
+/app/src/gen/pkg
+.DS_Store
+*.log
+/worlds
+
+# The authoring handoff is local only (it names the user's own hosts).
+/docs/authoring-handoff.md
+/assets/masters

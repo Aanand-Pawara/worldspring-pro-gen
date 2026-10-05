@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = ["crates/worldgen", "crates/worldgen-wasm", "crates/mapd"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "UNLICENSED"
+
+[workspace.dependencies]
+libm = "0.2.16"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+half = { version = "2.7", default-features = false }
+
+# Native release (tests, tools, mapd): fast to compile.
+[profile.release]
+opt-level = 3
+
+# Shipped WASM: whole-program optimization is worth the slow link.
+[profile.wasm]
+inherits = "release"
+lto = true
+codegen-units = 1
+
+# Generation is too slow unoptimized; keep dev builds usable.
+[profile.dev]
+opt-level = 2
