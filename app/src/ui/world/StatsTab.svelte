@@ -3,7 +3,7 @@
   import Icon from '../Icon.svelte';
 
   interface Props {
-    overlay: Overlay;
+    overlay: Overlay | null;
     onSelect: (f: Feature) => void;
   }
 
@@ -11,7 +11,8 @@
   let mode = $state<'settlements' | 'geography'>('settlements');
   let settlementKind = $state<'all' | 'metropolis' | 'city' | 'town' | 'village'>('all');
 
-  const settlements = $derived(overlay.features.filter((f) => ['metropolis', 'city', 'town', 'village'].includes(f.kind)));
+  const features = $derived(overlay?.features ?? []);
+  const settlements = $derived(features.filter((f) => ['metropolis', 'city', 'town', 'village'].includes(f.kind)));
   const population = (f: Feature) => Number(/pop\. ([\d,]+)/.exec(f.detail ?? '')?.[1]?.replace(/,/g, '') ?? 0);
   const label = (f: Feature) => f.name;
   const fmt = (n: number) => n.toLocaleString();
@@ -26,19 +27,19 @@
   );
 
   const peaks = $derived(
-    overlay.features.filter((f) => f.kind === 'peak' || f.kind === 'volcano').sort((a, b) => (b.elev_ft ?? 0) - (a.elev_ft ?? 0)),
+    features.filter((f) => f.kind === 'peak' || f.kind === 'volcano').sort((a, b) => (b.elev_ft ?? 0) - (a.elev_ft ?? 0)),
   );
   const rivers = $derived(
-    overlay.features.filter((f) => f.kind === 'river').sort((a, b) => b.extent_ft - a.extent_ft),
+    features.filter((f) => f.kind === 'river').sort((a, b) => b.extent_ft - a.extent_ft),
   );
   const lakes = $derived(
-    overlay.features.filter((f) => f.kind === 'lake' || f.kind === 'salt_lake').sort((a, b) => b.extent_ft - a.extent_ft),
+    features.filter((f) => f.kind === 'lake' || f.kind === 'salt_lake').sort((a, b) => b.extent_ft - a.extent_ft),
   );
   const waterfalls = $derived(
-    overlay.features.filter((f) => f.kind === 'waterfall').sort((a, b) => drop(b) - drop(a)),
+    features.filter((f) => f.kind === 'waterfall').sort((a, b) => drop(b) - drop(a)),
   );
   const landmasses = $derived(
-    overlay.features.filter((f) => f.kind === 'continent' || f.kind === 'island').sort((a, b) => b.extent_ft - a.extent_ft),
+    features.filter((f) => f.kind === 'continent' || f.kind === 'island').sort((a, b) => b.extent_ft - a.extent_ft),
   );
 
   const totalPopulation = $derived(settlements.reduce((n, f) => n + population(f), 0));
