@@ -96,14 +96,14 @@
     <section>
       <h3>Highest peaks</h3>
       {#each peaks.slice(0, 10) as f, i (f.id)}
-        <button class="row" onclick={() => select(f)}><span class="rank">{i + 1}</span><span class="icon"><Icon name="mountain" size={16} /></span><span class="name">{label(f)}<small>{f.kind}</small></span><strong>{fmt(drop(f))} ft drop</strong></button>
+        <button class="row" onclick={() => select(f)}><span class="rank">{i + 1}</span><span class="icon"><Icon name="mountain" size={16} /></span><span class="name">{label(f)}<small>{f.kind}</small></span><strong>{fmt(Math.round(f.elev_ft ?? 0))} ft</strong></button>
       {/each}
     </section>
 
     <section>
       <h3>Longest rivers</h3>
       {#each rivers.slice(0, 10) as f, i (f.id)}
-        <button class="row" onclick={() => select(f)}><span class="rank">{i + 1}</span><span class="icon"><Icon name="river" size={16} /></span><span class="name">{label(f)}<small>river</small></span><strong>{areaSqMi(f.extent_ft)} mi²</strong></button>
+        <button class="row" onclick={() => select(f)}><span class="rank">{i + 1}</span><span class="icon"><Icon name="river" size={16} /></span><span class="name">{label(f)}<small>river</small></span><strong>{miles(f.extent_ft)} mi</strong></button>
       {/each}
     </section>
 
@@ -117,14 +117,14 @@
     <section>
       <h3>Greatest waterfalls</h3>
       {#each waterfalls.slice(0, 10) as f, i (f.id)}
-        <button class="row" onclick={() => select(f)}><span class="rank">{i + 1}</span><span class="icon"><Icon name="waves" size={16} /></span><span class="name">{label(f)}<small>{f.detail ?? 'waterfall'}</small></span><strong>{fmt(Math.round(f.elev_ft ?? 0))} ft</strong></button>
+        <button class="row" onclick={() => select(f)}><span class="rank">{i + 1}</span><span class="icon"><Icon name="waves" size={16} /></span><span class="name">{label(f)}<small>{f.detail ?? 'waterfall'}</small></span><strong>{fmt(drop(f))} ft drop</strong></button>
       {/each}
     </section>
 
     <section>
       <h3>Largest landmasses</h3>
       {#each landmasses.slice(0, 10) as f, i (f.id)}
-        <button class="row" onclick={() => select(f)}><span class="rank">{i + 1}</span><span class="icon"><Icon name="land" size={16} /></span><span class="name">{label(f)}<small>{f.kind}</small></span><strong>{miles(f.extent_ft)} mi</strong></button>
+        <button class="row" onclick={() => select(f)}><span class="rank">{i + 1}</span><span class="icon"><Icon name="land" size={16} /></span><span class="name">{label(f)}<small>{f.kind}</small></span><strong>{areaSqMi(f.extent_ft)} mi²</strong></button>
       {/each}
     </section>
   {/if}
