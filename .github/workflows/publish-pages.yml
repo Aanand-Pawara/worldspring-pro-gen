@@ -35,8 +35,15 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
       - name: Install wasm-bindgen
-        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@0.2.129
 
       - name: Install app dependencies
         run: npm --prefix app ci
