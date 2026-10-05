@@ -288,7 +288,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             let road_bonus = road_bonus(k, tier).min(5.0);
             let road_factor = 1.0 + 0.10 * (road_bonus - 1.0).min(4.0);
             let altitude_factor = (1.0 - 0.22 * smoothstep(2_500.0, 7_500.0, inp.height[k] - sea)).max(0.72);
-            let kind_factor = if above := inp.height[k] - sea; above > 2_500.0 && tier >= Tier::Town { 0.92 } else { 1.0 };
+            let kind_factor = if inp.height[k] - sea > 2_500.0 && tier >= Tier::Town { 0.92 } else { 1.0 };
             let capacity = (habitat * water_bonus * road_factor * altitude_factor * kind_factor).clamp(0.35, 1.45);
             let raw = lo * libm::pow(hi / lo, rng.next_f64()) * capacity;
             let population = raw.round().clamp(lo * 0.5, hi * 1.15) as u32;
