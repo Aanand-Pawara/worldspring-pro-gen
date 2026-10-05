@@ -74,6 +74,8 @@ pub struct River {
     pub mouth_lake: Option<u32>,
     /// Number of T0 flow cells in this chain.
     pub length_cells: u32,
+    pub length_ft: f64,
+    pub basin_id: u64,
 }
 
 pub struct Hydro {
@@ -88,7 +90,7 @@ pub struct Hydro {
 }
 
 /// `feed`: extra discharge entering at cells (sketched rivers' sources).
-pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Climate, sea: f64, river_density: f64, feed: &[(usize, f64)]) -> Hydro {
+pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool], clim: &Climate, sea: f64, river_density: f64, feed: &[(usize, f64)]) -> Hydro {
     let n = w * h;
     let outlet: Vec<bool> = land.iter().map(|l| !l).collect();
     let fl = priority_flood(w, h, height, &outlet, 0.01);
@@ -209,7 +211,7 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
     }
 
     let flow_accumulation = accumulate_flow(w, h, land, &lake_of, &rec, &fl.order);
-    let rivers = extract_rivers(w, h, land, &lake_of, &rec, &q, &flow_accumulation, RIVER_Q / river_density.max(0.05), &lakes);
+    let rivers = extract_rivers(w, h, cell_ft, land, &lake_of, &rec, &q, &flow_accumulation, RIVER_Q / river_density.max(0.05), &lakes);
     Hydro { water, flow_accumulation, discharge: q.iter().map(|&v| v as f32).collect(), lake_of, lakes, rivers }
 }
 
@@ -226,7 +228,7 @@ fn accumulate_flow(w: usize, h: usize, land: &[bool], _lake_of: &[u32], rec: &[u
     acc
 }
 
-fn extract_rivers(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32], q: &[f64], accumulation: &[u32], threshold: f64, lakes: &[Lake]) -> Vec<River> {
+fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u32], rec: &[u32], q: &[f64], accumulation: &[u32], threshold: f64, lakes: &[Lake]) -> Vec<River> {
     let n = w * h;
     let threshold = threshold.max(1.0);
     let mut lake_feed = vec![false; n];
@@ -405,7 +407,7 @@ fn extract_rivers(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32
         let source_cell = *cells.first().unwrap() as usize;
         let source_lake = neighbors(w, h, source_cell).filter_map(|(nb, _)| (lake_of[nb] != NO_LAKE && rec[nb] as usize == source_cell).then_some(lake_of[nb])).min();
         let qv = cells.iter().map(|&c| q[c as usize] as f32).collect();
-        chains.push(River { cells, q: qv, mouth, into, order: seg_order[root].max(1), drainage_area_cells: accumulation[source_cell], peak_discharge: 0.0, tributary_count: 0, source_lake, mouth_lake, length_cells: 0 });
+        chains.push(River { cells, q: qv, mouth, into, order: seg_order[root].max(1), drainage_area_cells: accumulation[source_cell], peak_discharge: 0.0, tributary_count: 0, source_lake, mouth_lake, length_cells: 0, length_ft: 0.0, basin_id: 0 });
 
         for &k in &path {
             let main_child = path.iter().position(|&p| p == k).and_then(|i| path.get(i + 1)).copied();
@@ -419,8 +421,34 @@ fn extract_rivers(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32
         chain.tributary_count = tributary_counts[id];
         chain.length_cells = chain.cells.len().min(u32::MAX as usize) as u32;
     }
+    for id in 0..chains.len() {
+        let basin_id = if let Some(parent) = chains[id].into {
+            chains[parent].basin_id
+        } else {
+            let end = *chains[id].cells.last().unwrap_or(&0) as u64;
+            match chains[id].mouth {
+                Mouth::Ocean => end,
+                Mouth::Lake => 0x1_0000_0000u64 | chains[id].mouth_lake.unwrap_or(0) as u64,
+                Mouth::Dry => 0x2_0000_0000u64 | end,
+                Mouth::Confluence => end,
+            }
+        };
+        let drainage = chains[id].cells.iter().map(|&cc| accumulation[cc as usize]).max().unwrap_or(0);
+        chains[id].basin_id = basin_id;
+        chains[id].drainage_area_cells = drainage;
+        chains[id].length_ft = chain_length_ft(w, &chains[id].cells, cell_ft);
+    }
     chains
 }
+
+fn chain_length_ft(w: usize, cells: &[u32], cell_ft: f64) -> f64 {
+    cells.windows(2).map(|pair| {
+        let a = pair[0] as usize;
+        let b = pair[1] as usize;
+        let dx = (a % w) as f64 - (b % w) as f64;
+        let dy = (a / w) as f64 - (b / w) as f64;
+        crate::core::sqrt(dx * dx + dy * dy) * cell_ft
+    }).sum()
 
 #[cfg(test)]
 mod tests {
@@ -459,7 +487,7 @@ mod tests {
             outlet: Some(1),
             inlet_count: 1,
         }];
-        let rivers = extract_rivers(4, 1, &land, &lake, &rec, &q, &acc, 20_000.0, &lakes);
+        let rivers = extract_rivers(4, 1, 1.0, &land, &lake, &rec, &q, &acc, 20_000.0, &lakes);
         assert_eq!(rivers.len(), 1);
         assert_eq!(rivers[0].source_lake, Some(0));
         assert_eq!(rivers[0].mouth, Mouth::Ocean);
@@ -480,7 +508,7 @@ mod tests {
             outlet: None,
             inlet_count: 1,
         }];
-        let rivers = extract_rivers(2, 1, &land, &lake, &rec, &q, &acc, 20_000.0, &lakes);
+        let rivers = extract_rivers(2, 1, 1.0, &land, &lake, &rec, &q, &acc, 20_000.0, &lakes);
         assert_eq!(rivers.len(), 1);
         assert_eq!(rivers[0].source_lake, None);
         assert_eq!(rivers[0].mouth, Mouth::Lake);
