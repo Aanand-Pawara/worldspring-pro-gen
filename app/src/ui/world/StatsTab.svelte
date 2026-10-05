@@ -96,7 +96,7 @@
     <section>
       <h3>Highest peaks</h3>
       {#each peaks.slice(0, 10) as f, i (f.id)}
-        <button class="row" onclick={() => select(f)}><span class="rank">{i + 1}</span><span class="icon"><Icon name="mountain" size={16} /></span><span class="name">{label(f)}<small>{f.kind}</small></span><strong>{fmt(Math.round(f.elev_ft ?? 0))} ft</strong></button>
+        <button class="row" onclick={() => select(f)}><span class="rank">{i + 1}</span><span class="icon"><Icon name="mountain" size={16} /></span><span class="name">{label(f)}<small>{f.kind}</small></span><strong>{fmt(drop(f))} ft drop</strong></button>
       {/each}
     </section>
 
@@ -110,7 +110,7 @@
     <section>
       <h3>Largest lakes</h3>
       {#each lakes.slice(0, 10) as f, i (f.id)}
-        <button class="row" onclick={() => select(f)}><span class="rank">{i + 1}</span><span class="icon"><Icon name="waves" size={16} /></span><span class="name">{label(f)}<small>{f.kind.replace('_', ' ')}</small></span><strong>{miles(f.extent_ft)} mi</strong></button>
+        <button class="row" onclick={() => select(f)}><span class="rank">{i + 1}</span><span class="icon"><Icon name="waves" size={16} /></span><span class="name">{label(f)}<small>{f.kind.replace('_', ' ')}</small></span><strong>{areaSqMi(f.extent_ft)} mi²</strong></button>
       {/each}
     </section>
 
