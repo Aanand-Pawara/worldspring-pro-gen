@@ -18,6 +18,7 @@
   import GenerateTab from './ui/world/GenerateTab.svelte';
   import LibraryTab from './ui/world/LibraryTab.svelte';
   import StatsTab from './ui/world/StatsTab.svelte';
+  import FactsTab from './ui/world/FactsTab.svelte';
   import { WorldDraft } from './ui/world/draft.svelte';
   import Icon from './ui/Icon.svelte';
   import Readout from './ui/shell/Readout.svelte';
@@ -1521,6 +1522,7 @@
         { key: 'sketch', label: 'Sketch', icon: 'sketch', dot: sketchOn, title: sketchOn ? 'Sketching' : 'Draw coastlines, ranges, rivers, biomes and settlements' },
         { key: 'library', label: 'Library', icon: 'folder' },
         { key: 'stats', label: 'Statistics', icon: 'activity' },
+        { key: 'facts', label: 'Facts', icon: 'dice' },
       ]}
       tab={shell.tabs.world}
       onTab={(k) => go('world', k)}
@@ -1572,8 +1574,10 @@
             {/if}
           {:else if shell.tabs.world === 'library'}
             <LibraryTab {world} {busy} onOpen={openWorld} onStartOver={startOver} />
-          {:else}
+          {:else if shell.tabs.world === 'stats'}
             <StatsTab {overlay} onSelect={(f) => select({ kind: 'feature', feature: f })} />
+          {:else}
+            <FactsTab {world} {overlay} onSelect={(f) => select({ kind: 'feature', feature: f })} />
           {/if}
         {/if}
       {/snippet}
