@@ -237,17 +237,94 @@
     </nav>
 
     {#if ranking === 'settlements'}
-      <Rank title="Most populated settlements" items={settlementRank.slice(0, 15)} value={(f) => fmt(population(f))} suffix="" icon="castle" {selectFeature} />
+      <section>
+        <h3>Most populated settlements</h3>
+        {#each settlementRank.slice(0, 15) as f, i (f.id)}
+          <button type="button" class="row" onclick={() => selectFeature(f)}>
+            <span class="rank">{i + 1}</span>
+            <span class="icon"><Icon name="castle" size={15} /></span>
+            <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
+            <strong>{fmt(population(f))}</strong>
+          </button>
+        {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
+      </section>
     {:else if ranking === 'terrain'}
-      <Rank title="Highest peaks and volcanoes" items={peakRank.slice(0, 15)} value={(f) => fmt(Math.round(f.elev_ft ?? 0))} suffix=" ft" icon="mountain" {selectFeature} />
-      {#if ranges.length}<Rank title="Largest mountain ranges" items={[...ranges].sort((a, b) => b.extent_ft - a.extent_ft).slice(0, 10)} value={(f) => fmtMiles(miles(f.extent_ft))} suffix=" mi" icon="mountain" {selectFeature} />{/if}
-      {#if passes.length}<Rank title="Highest passes" items={[...passes].sort((a, b) => (b.elev_ft ?? 0) - (a.elev_ft ?? 0)).slice(0, 10)} value={(f) => fmt(Math.round(f.elev_ft ?? 0))} suffix=" ft" icon="mountain" {selectFeature} />{/if}
-    {:else if ranking === 'water'}
-      <Rank title="Longest rivers" items={riverRank.slice(0, 15)} value={(f) => fmtMiles(miles(f.extent_ft))} suffix=" mi" icon="river" {selectFeature} />
-      <Rank title="Largest drainage basins" items={[...rivers].sort((a, b) => (b.drainage_area_mi2 ?? 0) - (a.drainage_area_mi2 ?? 0)).slice(0, 15)} value={(f) => fmtMiles(f.drainage_area_mi2 ?? 0)} suffix=" mi²" icon="river" {selectFeature} />
-      <Rank title="Largest lake-type features" items={lakeRank.slice(0, 15)} value={(f) => fmtMiles(areaSqMi(f.extent_ft))} suffix=" mi²" icon="waves" {selectFeature} />
-      <Rank title="Highest stream order" items={[...rivers].sort((a, b) => (b.stream_order ?? 0) - (a.stream_order ?? 0) || (b.drainage_area_mi2 ?? 0) - (a.drainage_area_mi2 ?? 0)).slice(0, 15)} value={(f) => fmt(f.stream_order ?? 0)} suffix="" icon="river" {selectFeature} />
-      <Rank title="Greatest waterfalls" items={[...waterfalls].sort((a, b) => drop(b) - drop(a)).slice(0, 10)} value={(f) => fmt(drop(f))} suffix=" ft" icon="waves" {selectFeature} />
+      <section>
+        <h3>Highest peaks and volcanoes</h3>
+        {#each peakRank.slice(0, 15) as f, i (f.id)}
+          <button type="button" class="row" onclick={() => selectFeature(f)}>
+            <span class="rank">{i + 1}</span>
+            <span class="icon"><Icon name="mountain" size={15} /></span>
+            <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
+            <strong>{fmt(Math.round(f.elev_ft ?? 0))} ft</strong>
+          </button>
+        {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
+      </section>
+      {#if ranges.length}
+      <section>
+        <h3>Largest mountain ranges</h3>
+        {#each [...ranges].sort((a, b) => b.extent_ft - a.extent_ft).slice(0, 10) as f, i (f.id)}
+          <button type="button" class="row" onclick={() => selectFeature(f)}>
+            <span class="rank">{i + 1}</span>
+            <span class="icon"><Icon name="mountain" size={15} /></span>
+            <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
+            <strong>{fmtMiles(miles(f.extent_ft))} mi</strong>
+          </button>
+        {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
+      </section>
+      {/if}
+      {#if passes.length}
+      <section>
+        <h3>Highest passes</h3>
+        {#each [...passes].sort((a, b) => (b.elev_ft ?? 0) - (a.elev_ft ?? 0)).slice(0, 10) as f, i (f.id)}
+          <button type="button" class="row" onclick={() => selectFeature(f)}>
+            <span class="rank">{i + 1}</span>
+            <span class="icon"><Icon name="mountain" size={15} /></span>
+            <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
+            <strong>{fmt(Math.round(f.elev_ft ?? 0))} ft</strong>
+          </button>
+        {:else}<div class="empty">Nothing generated for this ranking.</div>{, b) => (b.drainage_area_mi2 ?? 0) - (a.drainage_area_mi2 ?? 0)).slice(0, 15) as f, i (f.id)}
+          <button type="button" class="row" onclick={() => selectFeature(f)}>
+            <span class="rank">{i + 1}</span>
+            <span class="icon"><Icon name="river" size={15} /></span>
+            <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
+            <strong>{fmtMiles(f.drainage_area_mi2 ?? 0)} mi²</strong>
+          </button>
+        {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
+      </section>
+      <section>
+        <h3>Largest lake-type features</h3>
+        {#each lakeRank.slice(0, 15) as f, i (f.id)}
+          <button type="button" class="row" onclick={() => selectFeature(f)}>
+            <span class="rank">{i + 1}</span>
+            <span class="icon"><Icon name="waves" size={15} /></span>
+            <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
+            <strong>{fmtMiles(areaSqMi(f.extent_ft))} mi²</strong>
+          </button>
+        {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
+      </section>
+      <section>
+        <h3>Highest stream order</h3>
+        {#each [...rivers].sort((a, b) => (b.stream_order ?? 0) - (a.stream_order ?? 0) || (b.drainage_area_mi2 ?? 0) - (a.drainage_area_mi2 ?? 0)).slice(0, 15) as f, i (f.id)}
+          <button type="button" class="row" onclick={() => selectFeature(f)}>
+            <span class="rank">{i + 1}</span>
+            <span class="icon"><Icon name="river" size={15} /></span>
+            <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
+            <strong>{fmt(f.stream_order ?? 0)}</strong>
+          </button>
+        {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
+      </section>
+      <section>
+        <h3>Greatest waterfalls</h3>
+        {#each [...waterfalls].sort((a, b) => drop(b) - drop(a)).slice(0, 10) as f, i (f.id)}
+          <button type="button" class="row" onclick={() => selectFeature(f)}>
+            <span class="rank">{i + 1}</span>
+            <span class="icon"><Icon name="waves" size={15} /></span>
+            <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
+            <strong>{fmt(drop(f))} ft</strong>
+          </button>
+        {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
+      </section>
     {:else}
       <section>
         <h3>Most represented named biome regions</h3>
