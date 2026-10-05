@@ -1228,6 +1228,12 @@
     flyToSelection(s);
   }
 
+  // Keep the map's transient river highlight in lockstep with the selected feature.
+  $effect(() => {
+    const s = selection;
+    view.setSelectedFeature(s?.kind === 'feature' ? s.feature : null);
+  });
+
   async function pick(x: number, y: number, sx: number, sy: number) {
     const f = view.labels?.hit(sx, sy);
     const shop = f?.kind === 'place' ? view.labels?.placeHit(f.id) : null;
