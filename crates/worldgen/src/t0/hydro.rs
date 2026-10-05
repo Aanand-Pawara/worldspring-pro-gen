@@ -213,7 +213,7 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
     Hydro { water, flow_accumulation, discharge: q.iter().map(|&v| v as f32).collect(), lake_of, lakes, rivers }
 }
 
-fn accumulate_flow(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32], order: &[u32]) -> Vec<u32> {
+fn accumulate_flow(w: usize, h: usize, land: &[bool], _lake_of: &[u32], rec: &[u32], order: &[u32]) -> Vec<u32> {
     let n = w * h;
     let mut acc = vec![0u32; n];
     for i in 0..n { if land[i] { acc[i] = 1; } }
