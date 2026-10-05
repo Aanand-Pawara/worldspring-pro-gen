@@ -130,6 +130,23 @@
         {@const f = selection.feature}
         {#if f.detail}<div>{f.detail}</div>{/if}
         {#if f.elev_ft !== undefined}<div>Elevation {Math.round(f.elev_ft).toLocaleString()} ft</div>{/if}
+        {#if f.kind === 'river'}
+          <div class="metric-grid">
+            <span>Length</span><b>{(f.length_mi ?? mi(f.extent_ft)).toLocaleString(undefined, { maximumFractionDigits: 1 })} mi</b>
+            <span>Basin</span><b>#{f.basin_id ?? 'n/a'}</b>
+            <span>Stream order</span><b>{f.stream_order ?? 1}</b>
+            <span>Drainage</span><b>{(f.drainage_area_mi2 ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} mi²</b>
+            <span>Tributaries</span><b>{f.tributary_count ?? 0}</b>
+            <span>Mouth</span><b>{f.river_mouth ?? 'unknown'}</b>
+          </div>
+        {:else if ['lake', 'salt_lake', 'salt_flat'].includes(f.kind)}
+          <div class="metric-grid">
+            <span>Area</span><b>{(f.area_mi2 ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} mi²</b>
+            <span>Max depth</span><b>{Math.round(f.max_depth_ft ?? 0).toLocaleString()} ft</b>
+            <span>Inlets</span><b>{f.inlet_count ?? 0}</b>
+            <span>Outlet</span><b>{f.has_outlet ? 'yes' : 'terminal'}</b>
+          </div>
+        {/if}
         <div class="muted">{mi(f.x)} mi E, {mi(f.y)} mi S</div>
       {:else if selection.kind === 'district'}
         {@const d = selection.hit}
@@ -265,6 +282,17 @@
     flex-direction: column;
     gap: 1px;
   }
+  .metric-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2px 10px;
+    padding: 5px 0;
+    border-top: 1px solid var(--line-faint);
+    border-bottom: 1px solid var(--line-faint);
+    font-size: 11px;
+  }
+  .metric-grid span { color: var(--ink-3); }
+  .metric-grid b { font: 11px var(--mono); text-align: right; }
   .muted {
     color: var(--ink-3);
     font-size: 12px;
