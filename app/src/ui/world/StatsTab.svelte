@@ -16,6 +16,8 @@
   const label = (f: Feature) => f.name;
   const fmt = (n: number) => n.toLocaleString();
   const miles = (ft: number) => (ft / 5280).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const areaSqMi = (ft: number) => ((ft * ft) / (5280 * 5280)).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const drop = (f: Feature) => Number(/drop ~([\d,]+) ft/.exec(f.detail ?? '')?.[1]?.replace(/,/g, '') ?? 0);
 
   const filteredSettlements = $derived(
     settlements
@@ -33,7 +35,7 @@
     overlay.features.filter((f) => f.kind === 'lake' || f.kind === 'salt_lake').sort((a, b) => b.extent_ft - a.extent_ft),
   );
   const waterfalls = $derived(
-    overlay.features.filter((f) => f.kind === 'waterfall').sort((a, b) => (b.elev_ft ?? 0) - (a.elev_ft ?? 0)),
+    overlay.features.filter((f) => f.kind === 'waterfall').sort((a, b) => drop(b) - drop(a)),
   );
   const landmasses = $derived(
     overlay.features.filter((f) => f.kind === 'continent' || f.kind === 'island').sort((a, b) => b.extent_ft - a.extent_ft),
@@ -101,7 +103,7 @@
     <section>
       <h3>Longest rivers</h3>
       {#each rivers.slice(0, 10) as f, i (f.id)}
-        <button class="row" onclick={() => select(f)}><span class="rank">{i + 1}</span><span class="icon"><Icon name="river" size={16} /></span><span class="name">{label(f)}<small>river</small></span><strong>{miles(f.extent_ft)} mi</strong></button>
+        <button class="row" onclick={() => select(f)}><span class="rank">{i + 1}</span><span class="icon"><Icon name="river" size={16} /></span><span class="name">{label(f)}<small>river</small></span><strong>{areaSqMi(f.extent_ft)} mi²</strong></button>
       {/each}
     </section>
 
