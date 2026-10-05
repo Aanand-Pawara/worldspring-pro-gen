@@ -49,6 +49,15 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
             drainage_area_mi2: None,
             discharge_index: None,
             tributary_count: None,
+            length_mi: None,
+            basin_id: None,
+            river_mouth: None,
+            source_lake_id: None,
+            mouth_lake_id: None,
+            area_mi2: None,
+            max_depth_ft: None,
+            inlet_count: None,
+            has_outlet: None,
         });
     }
     for f in &mut out {

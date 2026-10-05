@@ -493,7 +493,7 @@ impl Builder<'_> {
                     Mouth::Dry => "dry",
                     Mouth::Confluence => "confluence",
                 };
-                let detail = Some(format!("{} | mouth {} | order {} | basin {} | length {:.1} mi | drainage area {:.1} sq mi | discharge index {:.0} | {} direct tributaries", source, mouth, r.basin_id, len / 5280.0, basin_mi2, r.peak_discharge, r.tributary_count));
+                let detail = Some(format!("{} | mouth {} | order {} | basin {} | length {:.1} mi | drainage area {:.1} sq mi | discharge index {:.0} | {} direct tributaries", source, mouth, r.order, r.basin_id, len / 5280.0, basin_mi2, r.peak_discharge, r.tributary_count));
                 let id = self.push("river", NameKind::River, pts[m][0], pts[m][1], angle, len, None, detail);
                 let path = r.cells.iter().zip(&r.q).map(|(&cell, &q)| {
                     let k = cell as usize;
