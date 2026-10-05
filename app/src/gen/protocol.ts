@@ -411,6 +411,8 @@ export interface Feature {
   extent_ft: number;
   elev_ft?: number;
   detail?: string;
+  /** World-space river centerline used only for the selected-river overlay. */
+  river_path?: [number, number, number][];
 }
 
 export interface Overlay {

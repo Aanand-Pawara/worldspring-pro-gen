@@ -22,7 +22,11 @@ uniform float uPpf;
 uniform float uMinQ;
 
 float halfWidth(float q, float w) {
-    float symbolic = clamp(0.55 + 0.8 * (log(q / uMinQ) / log(10.0)), 0.5, 2.6);
+    // Cartographic width follows discharge rather than being nearly constant at overview
+    // scale. Natural channel width commonly follows a power law of discharge; b≈0.5 is a
+    // useful large-scale approximation (Leopold & Maddock / USGS).
+    float relative = max(q / max(uMinQ, 1.0), 0.05);
+    float symbolic = clamp(0.72 * pow(relative, 0.5), 0.65, 7.5);
     return 0.5 * max(symbolic, w * uPpf);
 }
 
