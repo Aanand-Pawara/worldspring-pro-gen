@@ -42,6 +42,24 @@ pub struct Feature {
     pub discharge_index: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tributary_count: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub length_mi: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub basin_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub river_mouth: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_lake_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mouth_lake_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub area_mi2: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_depth_ft: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inlet_count: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_outlet: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -146,7 +164,7 @@ impl Builder<'_> {
             id.push('b');
         }
         let c = self.inp.cell_ft;
-        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, river_path: None, stream_order: None, drainage_area_mi2: None, discharge_index: None, tributary_count: None });
+        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, river_path: None, stream_order: None, drainage_area_mi2: None, discharge_index: None, tributary_count: None, length_mi: None, basin_id: None, river_mouth: None, source_lake_id: None, mouth_lake_id: None, area_mi2: None, max_depth_ft: None, inlet_count: None, has_outlet: None });
         id
     }
 
@@ -433,12 +451,19 @@ impl Builder<'_> {
                 LakeKind::SaltFlat => ("salt_flat", NameKind::SaltFlat),
             };
             let elev = lake.level_ft - inp.world.params().sea_level_ft;
+            let area_mi2 = lake.cells.len() as f64 * inp.cell_ft * inp.cell_ft / (5280.0 * 5280.0);
             let connectivity = if let Some(outlet) = lake.outlet {
-                format!("flow-through lake, {} inlet{} | outlet cell {}", lake.inlet_count, if lake.inlet_count == 1 { "" } else { "s" }, outlet)
+                format!("flow-through lake, {} inlet{} | outlet cell {} | area {:.1} sq mi | max depth {:.0} ft", lake.inlet_count, if lake.inlet_count == 1 { "" } else { "s" }, outlet, area_mi2, lake.max_depth_ft)
             } else {
-                format!("terminal lake, {} inlet{}", lake.inlet_count, if lake.inlet_count == 1 { "" } else { "s" })
+                format!("terminal lake, {} inlet{} | area {:.1} sq mi | max depth {:.0} ft", lake.inlet_count, if lake.inlet_count == 1 { "" } else { "s" }, area_mi2, lake.max_depth_ft)
             };
-            self.push(kind, nk, ax, ay, angle, extent, Some(elev.round()), Some(connectivity));
+            let id = self.push(kind, nk, ax, ay, angle, extent, Some(elev.round()), Some(connectivity));
+            if let Some(f) = self.out.features.iter_mut().find(|f| f.id == id) {
+                f.area_mi2 = Some(area_mi2);
+                f.max_depth_ft = Some(lake.max_depth_ft);
+                f.inlet_count = Some(lake.inlet_count);
+                f.has_outlet = Some(lake.outlet.is_some());
+            }
         }
     }
 
@@ -459,7 +484,7 @@ impl Builder<'_> {
                 let a = pts[m.saturating_sub(3)];
                 let b = pts[(m + 3).min(pts.len() - 1)];
                 let angle = upright(libm::atan2(b[1] - a[1], b[0] - a[0]));
-                let len = r.cells.len() as f64 * inp.cell_ft;
+                let len = r.length_ft;
                 let basin_mi2 = r.drainage_area_cells as f64 * inp.cell_ft * inp.cell_ft / (5280.0 * 5280.0);
                 let source = if r.source_lake.is_some() { "lake-fed" } else { "headwater" };
                 let mouth = match r.mouth {
@@ -468,7 +493,7 @@ impl Builder<'_> {
                     Mouth::Dry => "dry",
                     Mouth::Confluence => "confluence",
                 };
-                let detail = Some(format!("{} | mouth {} | order {} | drainage area {:.1} sq mi | discharge index {:.0} | {} direct tributaries", source, mouth, r.order, basin_mi2, r.peak_discharge, r.tributary_count));
+                let detail = Some(format!("{} | mouth {} | order {} | basin {} | length {:.1} mi | drainage area {:.1} sq mi | discharge index {:.0} | {} direct tributaries", source, mouth, r.basin_id, len / 5280.0, basin_mi2, r.peak_discharge, r.tributary_count));
                 let id = self.push("river", NameKind::River, pts[m][0], pts[m][1], angle, len, None, detail);
                 let path = r.cells.iter().zip(&r.q).map(|(&cell, &q)| {
                     let k = cell as usize;
@@ -482,6 +507,11 @@ impl Builder<'_> {
                     f.drainage_area_mi2 = Some(basin_mi2);
                     f.discharge_index = Some(r.peak_discharge as f64);
                     f.tributary_count = Some(r.tributary_count);
+                    f.length_mi = Some(r.length_ft / 5280.0);
+                    f.basin_id = Some(r.basin_id);
+                    f.river_mouth = Some(match r.mouth { Mouth::Ocean => "ocean", Mouth::Lake => "lake", Mouth::Dry => "dry", Mouth::Confluence => "confluence" });
+                    f.source_lake_id = r.source_lake;
+                    f.mouth_lake_id = r.mouth_lake;
                 }
             }
             let _ = q;
@@ -536,6 +566,44 @@ impl Builder<'_> {
                 let extent = (comp.len() as f64).sqrt() * inp.cell_ft;
                 self.push(kind, nk, ax, ay, angle, extent, None, None);
             }
+        }
+
+        let p = inp.world.params();
+        let plateau_mask: Vec<bool> = (0..inp.w * inp.h).map(|k| {
+            if !inp.land[k] || inp.hydro.lake_of[k] != super::hydro::NO_LAKE { return false; }
+            if inp.height[k] - p.sea_level_ft < 0.22 * p.max_elev_ft { return false; }
+            let mut lo = inp.height[k];
+            let mut hi = inp.height[k];
+            for (nb, _) in neighbors(inp.w, inp.h, k) { lo = lo.min(inp.height[nb]); hi = hi.max(inp.height[nb]); }
+            hi - lo < 0.055 * p.max_elev_ft
+        }).collect();
+        let plateau_inside = distance_to(inp.w, inp.h, &plateau_mask.iter().map(|m| !m).collect::<Vec<_>>());
+        for comp in components(inp.w, inp.h, |k| plateau_mask[k], false) {
+            if comp.len() < 45 { continue; }
+            let (ax, ay) = pole(inp.w, &comp, &plateau_inside);
+            let (angle, _) = principal_axis(inp.w, &comp, 0.25);
+            let extent = (comp.len() as f64).sqrt() * inp.cell_ft;
+            self.push("plateau", NameKind::Plateau, ax, ay, angle, extent, None, None);
+        }
+
+        let valley_mask: Vec<bool> = (0..inp.w * inp.h).map(|k| {
+            if !inp.land[k] || inp.hydro.lake_of[k] != super::hydro::NO_LAKE { return false; }
+            if inp.height[k] - p.sea_level_ft < 20.0 { return false; }
+            let mut higher = 0;
+            let mut min_neighbour = inp.height[k];
+            for (nb, _) in neighbors(inp.w, inp.h, k) {
+                min_neighbour = min_neighbour.min(inp.height[nb]);
+                if inp.height[nb] > inp.height[k] + 250.0 { higher += 1; }
+            }
+            higher >= 2 && inp.height[k] - min_neighbour < 900.0
+        }).collect();
+        let valley_inside = distance_to(inp.w, inp.h, &valley_mask.iter().map(|m| !m).collect::<Vec<_>>());
+        for comp in components(inp.w, inp.h, |k| valley_mask[k], false) {
+            if comp.len() < 30 { continue; }
+            let (ax, ay) = pole(inp.w, &comp, &valley_inside);
+            let (angle, _) = principal_axis(inp.w, &comp, 0.35);
+            let extent = (comp.len() as f64).sqrt() * inp.cell_ft;
+            self.push("valley", NameKind::Valley, ax, ay, angle, extent, None, None);
         }
     }
 }
