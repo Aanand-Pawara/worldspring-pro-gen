@@ -491,6 +491,8 @@ mod tests {
         assert_eq!(rivers.len(), 1);
         assert_eq!(rivers[0].source_lake, Some(0));
         assert_eq!(rivers[0].mouth, Mouth::Ocean);
+        assert!(rivers[0].length_ft > 0.0);
+        assert_eq!(rivers[0].basin_id, 3);
     }
 
     #[test]
@@ -513,6 +515,8 @@ mod tests {
         assert_eq!(rivers[0].source_lake, None);
         assert_eq!(rivers[0].mouth, Mouth::Lake);
         assert_eq!(rivers[0].mouth_lake, Some(0));
+        assert!(rivers[0].length_ft > 0.0);
+        assert_eq!(rivers[0].basin_id, 0x1_0000_0000);
     }
 
     #[test]
