@@ -248,6 +248,17 @@
           </button>
         {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
       </section>
+      <section>
+        <h3>Highest-elevation settlements</h3>
+        {#each [...settlements].sort((a, b) => (b.elev_ft ?? 0) - (a.elev_ft ?? 0) || population(b) - population(a)).slice(0, 15) as f, i (f.id)}
+          <button type="button" class="row" onclick={() => selectFeature(f)}>
+            <span class="rank">{i + 1}</span>
+            <span class="icon"><Icon name="castle" size={15} /></span>
+            <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
+            <strong>{fmt(Math.round(f.elev_ft ?? 0))} ft</strong>
+          </button>
+        {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
+      </section>
     {:else if ranking === 'terrain'}
       <section>
         <h3>Highest peaks and volcanoes</h3>
@@ -283,7 +294,23 @@
             <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
             <strong>{fmt(Math.round(f.elev_ft ?? 0))} ft</strong>
           </button>
-        {:else}<div class="empty">Nothing generated for this ranking.</div>{, b) => (b.drainage_area_mi2 ?? 0) - (a.drainage_area_mi2 ?? 0)).slice(0, 15) as f, i (f.id)}
+        {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
+      </section>
+      {/if}
+      <section>
+        <h3>Longest rivers</h3>
+        {#each riverRank.slice(0, 15) as f, i (f.id)}
+          <button type="button" class="row" onclick={() => selectFeature(f)}>
+            <span class="rank">{i + 1}</span>
+            <span class="icon"><Icon name="river" size={15} /></span>
+            <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
+            <strong>{fmtMiles(miles(f.extent_ft))} mi</strong>
+          </button>
+        {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
+      </section>
+      <section>
+        <h3>Largest drainage basins</h3>
+        {#each [...rivers].sort((a, b) => (b.drainage_area_mi2 ?? 0) - (a.drainage_area_mi2 ?? 0)).slice(0, 15) as f, i (f.id)}
           <button type="button" class="row" onclick={() => selectFeature(f)}>
             <span class="rank">{i + 1}</span>
             <span class="icon"><Icon name="river" size={15} /></span>
@@ -341,19 +368,6 @@
   {/if}
 </div>
 
-{#snippet Rank({ title, items, value, suffix, icon, selectFeature }: { title: string; items: Feature[]; value: (f: Feature) => string; suffix: string; icon: 'castle' | 'mountain' | 'river' | 'waves' | 'land'; selectFeature: (f: Feature) => void })}
-  <section>
-    <h3>{title}</h3>
-    {#each items as f, i (f.id)}
-      <button class="row" onclick={() => selectFeature(f)}>
-        <span class="rank">{i + 1}</span>
-        <span class="icon"><Icon name={icon} size={15} /></span>
-        <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
-        <strong>{value(f)}{suffix}</strong>
-      </button>
-    {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
-  </section>
-{/snippet}
 
 <style>
   .almanac { display:flex; flex-direction:column; gap:10px; }

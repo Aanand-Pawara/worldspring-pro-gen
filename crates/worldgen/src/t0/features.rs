@@ -433,7 +433,12 @@ impl Builder<'_> {
                 LakeKind::SaltFlat => ("salt_flat", NameKind::SaltFlat),
             };
             let elev = lake.level_ft - inp.world.params().sea_level_ft;
-            self.push(kind, nk, ax, ay, angle, extent, Some(elev.round()), None);
+            let connectivity = if let Some(outlet) = lake.outlet {
+                format!("flow-through lake, {} inlet{} | outlet cell {}", lake.inlet_count, if lake.inlet_count == 1 { "" } else { "s" }, outlet)
+            } else {
+                format!("terminal lake, {} inlet{}", lake.inlet_count, if lake.inlet_count == 1 { "" } else { "s" })
+            };
+            self.push(kind, nk, ax, ay, angle, extent, Some(elev.round()), Some(connectivity));
         }
     }
 
@@ -456,7 +461,14 @@ impl Builder<'_> {
                 let angle = upright(libm::atan2(b[1] - a[1], b[0] - a[0]));
                 let len = r.cells.len() as f64 * inp.cell_ft;
                 let basin_mi2 = r.drainage_area_cells as f64 * inp.cell_ft * inp.cell_ft / (5280.0 * 5280.0);
-                let detail = Some(format!("order {} | drainage area {:.1} sq mi | discharge index {:.0} | {} direct tributaries", r.order, basin_mi2, r.peak_discharge, r.tributary_count));
+                let source = if r.source_lake.is_some() { "lake-fed" } else { "headwater" };
+                let mouth = match r.mouth {
+                    Mouth::Ocean => "ocean",
+                    Mouth::Lake => "inland lake",
+                    Mouth::Dry => "dry",
+                    Mouth::Confluence => "confluence",
+                };
+                let detail = Some(format!("{} | mouth {} | order {} | drainage area {:.1} sq mi | discharge index {:.0} | {} direct tributaries", source, mouth, r.order, basin_mi2, r.peak_discharge, r.tributary_count));
                 let id = self.push("river", NameKind::River, pts[m][0], pts[m][1], angle, len, None, detail);
                 let path = r.cells.iter().zip(&r.q).map(|(&cell, &q)| {
                     let k = cell as usize;

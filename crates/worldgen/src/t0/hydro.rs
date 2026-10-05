@@ -39,6 +39,8 @@ pub struct Lake {
     pub cells: Vec<u32>,
     pub kind: LakeKind,
     pub max_depth_ft: f64,
+    pub outlet: Option<u32>,
+    pub inlet_count: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +70,8 @@ pub struct River {
     pub peak_discharge: f32,
     /// Number of direct tributary chains joining this chain.
     pub tributary_count: u16,
+    pub source_lake: Option<u32>,
+    pub mouth_lake: Option<u32>,
     /// Number of T0 flow cells in this chain.
     pub length_cells: u32,
 }
@@ -117,7 +121,7 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
             for &c in &comp {
                 lake_of[c as usize] = id;
             }
-            lakes.push(Lake { level_ft: level, cells: comp, kind: LakeKind::Fresh, max_depth_ft: depth });
+            lakes.push(Lake { level_ft: level, cells: comp, kind: LakeKind::Fresh, max_depth_ft: depth, outlet: None, inlet_count: 0 });
         }
     }
     // Fill every non-lake cell to the flooded surface: guarantees strictly downhill drainage.
@@ -128,6 +132,21 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
     }
 
     let (rec, _) = receivers(w, h, &fl.filled);
+
+    for lake_id in 0..lakes.len() {
+        lakes[lake_id].outlet = lakes[lake_id].cells.iter().copied().find(|&c| {
+            let r = rec[c as usize] as usize;
+            r != c as usize && lake_of[r] != lake_id as u32
+        });
+    }
+    for i in 0..n {
+        if !land[i] || lake_of[i] != NO_LAKE { continue; }
+        let r = rec[i] as usize;
+        if r < n && lake_of[r] != NO_LAKE {
+            let id = lake_of[r] as usize;
+            lakes[id].inlet_count = lakes[id].inlet_count.saturating_add(1);
+        }
+    }
 
     // Water balance. `raw` ignores losses (catchment supply); `q` includes them.
     let pet: Vec<f64> = clim.temp.iter().map(|&t| (350.0 + 55.0 * t as f64).max(0.0)).collect();
@@ -155,15 +174,14 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
         }
     }
 
-    // Classify lakes by their water balance at the exit cell.
     for lake in &mut lakes {
-        let exit = lake.cells.iter().map(|&c| c as usize).max_by(|&a, &b| raw[a].total_cmp(&raw[b]).then(a.cmp(&b))).unwrap();
+        let exit = lake.outlet.map(|c| c as usize).unwrap_or_else(|| lake.cells.iter().map(|&c| c as usize).max_by(|&x, &y| raw[x].total_cmp(&raw[y]).then(x.cmp(&y))).unwrap());
         let evap: f64 = lake.cells.iter().map(|&c| pet[c as usize]).sum();
-        let ratio = raw[exit] / evap.max(1.0);
-        // Only dry climates make salt lakes; elsewhere small closed basins stay fresh
-        // (groundwater seepage), like glacial kettle ponds.
+        let ratio = q[exit] / evap.max(1.0);
         let precip = lake.cells.iter().map(|&c| clim.precip[c as usize] as f64).sum::<f64>() / lake.cells.len() as f64;
-        lake.kind = if precip > 550.0 {
+        lake.kind = if lake.outlet.is_some() && q[exit] > 0.0 {
+            LakeKind::Fresh
+        } else if precip > 550.0 {
             LakeKind::Fresh
         } else if ratio < 0.35 {
             LakeKind::SaltFlat
@@ -191,140 +209,144 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
     }
 
     let flow_accumulation = accumulate_flow(w, h, land, &lake_of, &rec, &fl.order);
-    let rivers = extract_rivers(w, h, land, &lake_of, &rec, &q, &flow_accumulation, RIVER_Q / river_density);
+    let rivers = extract_rivers(w, h, land, &lake_of, &rec, &q, &flow_accumulation, RIVER_Q / river_density.max(0.05), &lakes);
     Hydro { water, flow_accumulation, discharge: q.iter().map(|&v| v as f32).collect(), lake_of, lakes, rivers }
 }
 
 fn accumulate_flow(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32], order: &[u32]) -> Vec<u32> {
     let n = w * h;
     let mut acc = vec![0u32; n];
-    for i in 0..n { if land[i] && lake_of[i] == NO_LAKE { acc[i] = 1; } }
+    for i in 0..n { if land[i] { acc[i] = 1; } }
     for &ii in order.iter().rev() {
         let i = ii as usize;
         if acc[i] == 0 { continue; }
         let r = rec[i] as usize;
-        if r != i && land[r] && lake_of[r] == NO_LAKE { acc[r] = acc[r].saturating_add(acc[i]); }
+        if r != i && land[r] { acc[r] = acc[r].saturating_add(acc[i]); }
     }
     acc
 }
 
-fn extract_rivers(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32], q: &[f64], accumulation: &[u32], threshold: f64) -> Vec<River> {
+fn extract_rivers(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32], q: &[f64], accumulation: &[u32], threshold: f64, lakes: &[Lake]) -> Vec<River> {
     let n = w * h;
-    let is_river = |i: usize| land[i] && lake_of[i] == NO_LAKE && q[i] >= threshold;
-    let mut donors = vec![0u8; n];
-    for i in 0..n {
-        let r = rec[i] as usize;
-        if is_river(i) && r != i {
-            donors[r] = donors[r].saturating_add(1);
+    let threshold = threshold.max(1.0);
+    let mut lake_feed = vec![false; n];
+    for lake in lakes {
+        if let Some(outlet) = lake.outlet {
+            let r = rec[outlet as usize] as usize;
+            if r < n && land[r] && lake_of[r] == NO_LAKE { lake_feed[r] = true; }
         }
     }
-    let is_start = |i: usize| is_river(i) && donors[i] != 1;
+    let is_channel = |i: usize| land[i] && lake_of[i] == NO_LAKE && (q[i] >= threshold || (lake_feed[i] && q[i] >= threshold * 0.20));
 
-    // Segments run from a source or confluence to the next confluence or a mouth.
-    struct Seg {
-        cells: Vec<u32>,
-        mouth: Mouth,
+    let mut upstream = vec![0u8; n];
+    for i in 0..n {
+        if !is_channel(i) { continue; }
+        let r = rec[i] as usize;
+        if r != i && is_channel(r) { upstream[r] = upstream[r].saturating_add(1); }
     }
-    let mut segs: Vec<Seg> = Vec::new();
+    let is_start = |i: usize| is_channel(i) && upstream[i] != 1;
+
+    let mut next_start: Vec<Option<u32>> = vec![None; n];
+    for i in 0..n {
+        if !land[i] || lake_of[i] != NO_LAKE { continue; }
+        let mut path = Vec::new();
+        let mut cur = i;
+        let found = loop {
+            let r = rec[cur] as usize;
+            if r == cur || r >= n || !land[r] || lake_of[r] != NO_LAKE { break None; }
+            if is_start(r) { break Some(r as u32); }
+            if let Some(v) = next_start[r] { break Some(v); }
+            path.push(cur);
+            cur = r;
+        };
+        for p in path { next_start[p] = found; }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Terminal { Ocean, Lake(u32), Dry }
+    let mut terminal: Vec<Option<Terminal>> = vec![None; n];
+    for i in 0..n {
+        if !land[i] { terminal[i] = Some(Terminal::Ocean); }
+        else if lake_of[i] != NO_LAKE { terminal[i] = Some(Terminal::Lake(lake_of[i])); }
+    }
+    for i in 0..n {
+        if terminal[i].is_some() { continue; }
+        let mut path = Vec::new();
+        let mut cur = i;
+        let end = loop {
+            let r = rec[cur] as usize;
+            if r == cur { break Terminal::Dry; }
+            if let Some(t) = terminal[r] { break t; }
+            path.push(cur);
+            cur = r;
+        };
+        for p in path { terminal[p] = Some(end); }
+        terminal[i] = Some(end);
+    }
+
+    struct Seg { cells: Vec<u32>, mouth: Mouth }
+    let starts: Vec<usize> = (0..n).filter(|&i| is_start(i)).collect();
     let mut seg_starting_at = vec![usize::MAX; n];
-    for start in 0..n {
-        if !is_start(start) {
-            continue;
-        }
+    for (k, &start) in starts.iter().enumerate() { seg_starting_at[start] = k; }
+
+    let mut segs = Vec::<Seg>::with_capacity(starts.len());
+    for &start in &starts {
         let mut cells = vec![start as u32];
         let mut cur = start;
-        let mouth = loop {
-            let nxt = rec[cur] as usize;
-            if nxt == cur {
-                break Mouth::Dry;
+        let mut mouth = Mouth::Dry;
+        loop {
+            let next = rec[cur] as usize;
+            if next == cur {
+                match terminal[cur].unwrap_or(Terminal::Dry) {
+                    Terminal::Ocean => mouth = Mouth::Ocean,
+                    Terminal::Lake(_) => { mouth = Mouth::Lake; }
+                    Terminal::Dry => {}
+                }
+                break;
             }
-            if !land[nxt] {
-                cells.push(nxt as u32);
-                break Mouth::Ocean;
+            if !land[next] { mouth = Mouth::Ocean; cells.push(next as u32); break; }
+            if lake_of[next] != NO_LAKE { mouth = Mouth::Lake; cells.push(next as u32); break; }
+            if is_channel(next) {
+                if is_start(next) { mouth = Mouth::Confluence; break; }
+                cells.push(next as u32);
+                cur = next;
+                continue;
             }
-            if lake_of[nxt] != NO_LAKE {
-                cells.push(nxt as u32);
-                break Mouth::Lake;
+            if next_start[cur].is_some() { mouth = Mouth::Confluence; break; }
+            match terminal[next].unwrap_or(Terminal::Dry) {
+                Terminal::Ocean => mouth = Mouth::Ocean,
+                Terminal::Lake(_) => { mouth = Mouth::Lake; }
+                Terminal::Dry => {}
             }
-            if !is_river(nxt) {
-                break Mouth::Dry;
-            }
-            cells.push(nxt as u32);
-            if is_start(nxt) {
-                break Mouth::Confluence;
-            }
-            cur = nxt;
-        };
-        seg_starting_at[start] = segs.len();
+            break;
+        }
         segs.push(Seg { cells, mouth });
     }
 
-    // Tree: a segment ending at a confluence flows into the segment starting there.
-    let parent: Vec<Option<usize>> = segs
-        .iter()
-        .map(|s| (s.mouth == Mouth::Confluence).then(|| seg_starting_at[*s.cells.last().unwrap() as usize]))
-        .collect();
-    let mut children: Vec<Vec<usize>> = vec![Vec::new(); segs.len()];
-    for (k, p) in parent.iter().enumerate() {
-        if let Some(p) = p {
-            children[*p].push(k);
+    let mut parent = vec![None; segs.len()];
+    for (k, seg) in segs.iter().enumerate() {
+        if seg.mouth != Mouth::Confluence { continue; }
+        let end = *seg.cells.last().unwrap() as usize;
+        if let Some(start) = next_start[end].or_else(|| {
+            let r = rec[end] as usize;
+            (r < n && is_start(r)).then_some(r as u32)
+        }) {
+            let p = seg_starting_at[start as usize];
+            if p != usize::MAX { parent[k] = Some(p); }
         }
     }
-    let inflow = |k: usize| -> f64 {
-        let c = &segs[k].cells;
-        q[c[c.len().saturating_sub(2)] as usize]
-    };
 
-    // Chains: from each root walk upstream along the largest tributary; other tributaries
-    // start their own chains flowing into this one.
-    let mut chains: Vec<River> = Vec::new();
-    let mut stack: Vec<(usize, Option<usize>)> =
-        (0..segs.len()).filter(|&k| parent[k].is_none()).map(|k| (k, None)).collect();
-    stack.sort_by(|a, b| inflow(b.0).total_cmp(&inflow(a.0)).then(a.0.cmp(&b.0)));
-    stack.reverse();
-    while let Some((root, into)) = stack.pop() {
-        let mut path = vec![root];
-        let mut cur = root;
-        loop {
-            let mut kids = children[cur].clone();
-            if kids.is_empty() {
-                break;
-            }
-            kids.sort_by(|a, b| inflow(*b).total_cmp(&inflow(*a)).then(a.cmp(b)));
-            cur = kids[0];
-            path.push(cur);
-        }
-        let chain_id = chains.len();
-        // Cells from source (last in path) down to the root's mouth; confluence cells shared.
-        let mut cells: Vec<u32> = Vec::new();
-        for &k in path.iter().rev() {
-            let c = &segs[k].cells;
-            let skip = usize::from(!cells.is_empty());
-            cells.extend_from_slice(&c[skip..]);
-        }
-        let mouth = if into.is_some() { Mouth::Confluence } else { segs[root].mouth };
-        let qv = cells.iter().map(|&c| q[c as usize] as f32).collect();
-        chains.push(River { cells, q: qv, mouth, into, order: 1, drainage_area_cells: 0, peak_discharge: 0.0, tributary_count: 0, length_cells: 0 });
-        for &k in &path {
-            let main_child = path.iter().position(|&p| p == k).and_then(|i| path.get(i + 1)).copied();
-            for &kid in &children[k] {
-                if Some(kid) != main_child {
-                    stack.push((kid, Some(chain_id)));
-                }
-            }
-        }
-    }
-    // Strahler order is computed from headwaters downstream. Equal-order confluences
-    // increment; unequal-order confluences retain the larger order.
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); segs.len()];
+    for (k, p) in parent.iter().enumerate() { if let Some(p) = p { children[*p].push(k); } }
+    let inflow = |k: usize| q[*segs[k].cells.last().unwrap() as usize];
+
     let mut pending = children.iter().map(Vec::len).collect::<Vec<_>>();
     let mut seg_order = vec![0u8; segs.len()];
     let mut queue: Vec<usize> = (0..segs.len()).filter(|&k| pending[k] == 0).collect();
     queue.sort_unstable();
     let mut qpos = 0;
     while qpos < queue.len() {
-        let k = queue[qpos];
-        qpos += 1;
-        seg_order[k] = 1;
+        let k = queue[qpos]; qpos += 1; seg_order[k] = 1;
         if let Some(p) = parent[k] {
             pending[p] = pending[p].saturating_sub(1);
             if pending[p] == 0 {
@@ -335,20 +357,70 @@ fn extract_rivers(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32
             }
         }
     }
-    let tributary_counts: Vec<u16> = (0..chains.len()).map(|chain_id| chains.iter().filter(|r| r.into == Some(chain_id)).count().min(u16::MAX as usize) as u16).collect();
-    for (chain_id, chain) in chains.iter_mut().enumerate() {
-        let source = chain.cells.first().copied().unwrap_or(0) as usize;
-        let seg = segs.iter().position(|s| s.cells.last().copied() == chain.cells.last().copied());
-        chain.order = seg.map(|k| seg_order[k].max(1)).unwrap_or(1);
-        chain.drainage_area_cells = accumulation[source];
+
+    let mut chains = Vec::<River>::new();
+    let mut stack: Vec<(usize, Option<usize>)> = (0..segs.len()).filter(|&k| parent[k].is_none()).map(|k| (k, None)).collect();
+    stack.sort_by(|a, b| inflow(b.0).total_cmp(&inflow(a.0)).then(a.0.cmp(&b.0)));
+    stack.reverse();
+
+    while let Some((root, into)) = stack.pop() {
+        let mut path = vec![root];
+        let mut cur = root;
+        loop {
+            let mut kids = children[cur].clone();
+            if kids.is_empty() { break; }
+            kids.sort_by(|a, b| inflow(*b).total_cmp(&inflow(*a)).then(a.cmp(b)));
+            cur = kids[0];
+            path.push(cur);
+        }
+        let chain_id = chains.len();
+        let mut cells = Vec::<u32>::new();
+        for &k in path.iter().rev() {
+            let c = &segs[k].cells;
+            let skip = usize::from(!cells.is_empty());
+            cells.extend_from_slice(&c[skip..]);
+        }
+        if into.is_none() {
+            let mut tail_cur = *cells.last().unwrap() as usize;
+            let mut guard = 0usize;
+            while guard < n {
+                guard += 1;
+                let next = rec[tail_cur] as usize;
+                if next == tail_cur { break; }
+                cells.push(next as u32);
+                if !land[next] || lake_of[next] != NO_LAKE { break; }
+                tail_cur = next;
+            }
+        }
+        let end_cell = *cells.last().unwrap() as usize;
+        let (mouth, mouth_lake) = if into.is_some() {
+            (Mouth::Confluence, None)
+        } else {
+            match terminal[end_cell].unwrap_or(Terminal::Dry) {
+                Terminal::Ocean => (Mouth::Ocean, None),
+                Terminal::Lake(id) => (Mouth::Lake, Some(id)),
+                Terminal::Dry => (Mouth::Dry, None),
+            }
+        };
+        let source_cell = *cells.first().unwrap() as usize;
+        let source_lake = neighbors(w, h, source_cell).filter_map(|(nb, _)| (lake_of[nb] != NO_LAKE && rec[nb] as usize == source_cell).then_some(lake_of[nb])).min();
+        let qv = cells.iter().map(|&c| q[c as usize] as f32).collect();
+        chains.push(River { cells, q: qv, mouth, into, order: seg_order[root].max(1), drainage_area_cells: accumulation[source_cell], peak_discharge: 0.0, tributary_count: 0, source_lake, mouth_lake, length_cells: 0 });
+
+        for &k in &path {
+            let main_child = path.iter().position(|&p| p == k).and_then(|i| path.get(i + 1)).copied();
+            for &kid in &children[k] { if Some(kid) != main_child { stack.push((kid, Some(chain_id))); } }
+        }
+    }
+
+    let tributary_counts: Vec<u16> = (0..chains.len()).map(|id| chains.iter().filter(|r| r.into == Some(id)).count().min(u16::MAX as usize) as u16).collect();
+    for (id, chain) in chains.iter_mut().enumerate() {
         chain.peak_discharge = chain.q.iter().copied().fold(0.0f32, f32::max);
-        chain.tributary_count = tributary_counts[chain_id];
+        chain.tributary_count = tributary_counts[id];
         chain.length_cells = chain.cells.len().min(u32::MAX as usize) as u32;
     }
-    // Chains are indexed by `into`, so short ones are kept here and filtered by consumers.
     chains
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -363,6 +435,59 @@ mod tests {
         assert_eq!(acc, vec![1, 3, 4, 1]);
     }
     #[test]
+    fn lake_cells_contribute_to_downstream_accumulation() {
+        let land = vec![true, true, true];
+        let lake = vec![NO_LAKE, 0, NO_LAKE];
+        let rec = vec![1, 1, 1];
+        let order = vec![2, 0, 1];
+        let acc = accumulate_flow(3, 1, &land, &lake, &rec, &order);
+        assert_eq!(acc, vec![1, 3, 1]);
+    }
+
+    #[test]
+    fn lake_fed_river_reaches_ocean() {
+        let land = vec![true, true, true, false];
+        let lake = vec![NO_LAKE, 0, NO_LAKE, NO_LAKE];
+        let rec = vec![0, 2, 3, 3];
+        let q = vec![0.0, 0.0, 30_000.0, 0.0];
+        let acc = vec![1, 2, 3, 0];
+        let lakes = vec![Lake {
+            level_ft: 100.0,
+            cells: vec![1],
+            kind: LakeKind::Fresh,
+            max_depth_ft: 100.0,
+            outlet: Some(1),
+            inlet_count: 1,
+        }];
+        let rivers = extract_rivers(4, 1, &land, &lake, &rec, &q, &acc, 20_000.0, &lakes);
+        assert_eq!(rivers.len(), 1);
+        assert_eq!(rivers[0].source_lake, Some(0));
+        assert_eq!(rivers[0].mouth, Mouth::Ocean);
+    }
+
+    #[test]
+    fn river_can_terminate_in_an_inland_lake() {
+        let land = vec![true, true];
+        let lake = vec![NO_LAKE, 0];
+        let rec = vec![1, 1];
+        let q = vec![30_000.0, 0.0];
+        let acc = vec![1, 2];
+        let lakes = vec![Lake {
+            level_ft: 100.0,
+            cells: vec![1],
+            kind: LakeKind::Fresh,
+            max_depth_ft: 100.0,
+            outlet: None,
+            inlet_count: 1,
+        }];
+        let rivers = extract_rivers(2, 1, &land, &lake, &rec, &q, &acc, 20_000.0, &lakes);
+        assert_eq!(rivers.len(), 1);
+        assert_eq!(rivers[0].source_lake, None);
+        assert_eq!(rivers[0].mouth, Mouth::Lake);
+        assert_eq!(rivers[0].mouth_lake, Some(0));
+    }
+
+    #[test]
     fn strahler_rule_keeps_higher_order_at_unequal_confluence() {
         let cases = [([1u8, 1], 2u8), ([1u8, 2], 2u8), ([2u8, 2], 3u8)];
         for (upstream, expected) in cases {
@@ -370,5 +495,20 @@ mod tests {
             let equal = upstream.iter().filter(|&&o| o == max).count() >= 2;
             assert_eq!(max + equal as u8, expected);
         }
+    }
+}
+
+
+#[cfg(test)]
+mod hydrology_regression_tests {
+    use super::*;
+    #[test]
+    fn accumulation_includes_lake_cells() {
+        let land = vec![true, true, true];
+        let lake = vec![NO_LAKE, 0, NO_LAKE];
+        let rec = vec![1, 1, 1];
+        let order = vec![2, 0, 1];
+        let acc = accumulate_flow(3, 1, &land, &lake, &rec, &order);
+        assert_eq!(acc, vec![1, 3, 1]);
     }
 }
