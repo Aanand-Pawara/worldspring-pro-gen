@@ -31,6 +31,9 @@ pub struct Feature {
     pub elev_ft: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Fine selection path for rivers only: x, y in ft and local channel width in ft.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub river_path: Option<Vec<[f64; 3]>>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -135,7 +138,7 @@ impl Builder<'_> {
             id.push('b');
         }
         let c = self.inp.cell_ft;
-        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail });
+        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, river_path: None });
         id
     }
 
@@ -431,7 +434,7 @@ impl Builder<'_> {
         let w = inp.w;
         let chains = inp.hydro.rivers.clone();
         let mut falls: Vec<(f64, f64, f64, usize)> = Vec::new();
-        for r in &chains {
+        for (ri, r) in chains.iter().enumerate() {
             if r.cells.len() < 3 {
                 continue;
             }
@@ -444,7 +447,16 @@ impl Builder<'_> {
                 let b = pts[(m + 3).min(pts.len() - 1)];
                 let angle = upright(libm::atan2(b[1] - a[1], b[0] - a[0]));
                 let len = r.cells.len() as f64 * inp.cell_ft;
-                self.push("river", NameKind::River, pts[m][0], pts[m][1], angle, len, None, None);
+                let id = self.push("river", NameKind::River, pts[m][0], pts[m][1], angle, len, None, Some(format!("river index {ri}")));
+                let path = r.cells.iter().zip(&r.q).map(|(&cell, &q)| {
+                    let k = cell as usize;
+                    let x = (k % w) as f64 * inp.cell_ft;
+                    let y = (k / w) as f64 * inp.cell_ft;
+                    [x, y, crate::lod::rivers::width_ft(q as f64)]
+                }).collect();
+                if let Some(f) = self.out.features.iter_mut().find(|f| f.id == id) {
+                    f.river_path = Some(path);
+                }
             }
             let _ = q;
 
