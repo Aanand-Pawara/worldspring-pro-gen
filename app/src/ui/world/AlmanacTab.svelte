@@ -23,7 +23,7 @@
   const ranges = $derived(features.filter((f) => f.kind === 'range'));
   const passes = $derived(features.filter((f) => f.kind === 'pass'));
   const volcanoes = $derived(features.filter((f) => f.kind === 'volcano'));
-  const regions = $derived(features.filter((f) => ['forest', 'jungle', 'taiga', 'desert', 'swamp', 'plains', 'tundra', 'glacier'].includes(f.kind)));
+  const regions = $derived(features.filter((f) => ['forest', 'jungle', 'taiga', 'desert', 'swamp', 'plains', 'tundra', 'glacier', 'plateau', 'valley'].includes(f.kind)));
 
   const population = (f: Feature) => Number(/pop\. ([\d,]+)/.exec(f.detail ?? '')?.[1]?.replace(/,/g, '') ?? 0);
   const drop = (f: Feature) => Number(/drop ~([\d,]+) ft/.exec(f.detail ?? '')?.[1]?.replace(/,/g, '') ?? 0);
@@ -47,12 +47,20 @@
 
   const largestSettlement = $derived(settlements.reduce<Feature | null>((best, f) => !best || population(f) > population(best) ? f : best, null));
   const highestPeak = $derived(peaks.reduce<Feature | null>((best, f) => !best || (f.elev_ft ?? 0) > (best.elev_ft ?? 0) ? f : best, null));
-  const longestRiver = $derived(rivers.reduce<Feature | null>((best, f) => !best || f.extent_ft > best.extent_ft ? f : best, null));
+  const longestRiver = $derived(rivers.reduce<Feature | null>((best, f) => !best || (f.length_mi ?? miles(f.extent_ft)) > (best.length_mi ?? miles(best.extent_ft)) ? f : best, null));
   const largestRiverBasin = $derived(rivers.reduce<Feature | null>((best, f) => !best || (f.drainage_area_mi2 ?? 0) > (best.drainage_area_mi2 ?? 0) ? f : best, null));
-  const largestLake = $derived(lakes.reduce<Feature | null>((best, f) => !best || f.extent_ft > best.extent_ft ? f : best, null));
+  const largestLake = $derived(lakes.reduce<Feature | null>((best, f) => !best || (f.area_mi2 ?? areaSqMi(f.extent_ft)) > (best.area_mi2 ?? areaSqMi(best.extent_ft)) ? f : best, null));
   const largestLandmass = $derived(landmasses.reduce<Feature | null>((best, f) => !best || f.extent_ft > best.extent_ft ? f : best, null));
   const highestWaterfall = $derived(waterfalls.reduce<Feature | null>((best, f) => !best || drop(f) > drop(best) ? f : best, null));
   const largestRange = $derived(ranges.reduce<Feature | null>((best, f) => !best || f.extent_ft > best.extent_ft ? f : best, null));
+  const oceanRivers = $derived(rivers.filter((f) => f.river_mouth === 'ocean'));
+  const inlandLakeRivers = $derived(rivers.filter((f) => f.river_mouth === 'lake'));
+  const dryRivers = $derived(rivers.filter((f) => f.river_mouth === 'dry'));
+  const lakeFedRivers = $derived(rivers.filter((f) => f.source_lake_id !== undefined));
+  const terminalLakes = $derived(lakes.filter((f) => f.has_outlet === false));
+  const flowThroughLakes = $derived(lakes.filter((f) => f.has_outlet === true));
+  const totalRiverMiles = $derived(rivers.reduce((n, f) => n + (f.length_mi ?? miles(f.extent_ft)), 0));
+  const highestOrderRiver = $derived(rivers.reduce<Feature | null>((best, f) => !best || (f.stream_order ?? 0) > (best.stream_order ?? 0) ? f : best, null));
 
   const activeVolcanoes = $derived(volcanoes.filter((f) => (f.detail ?? '').startsWith('active ')));
   const dormantVolcanoes = $derived(volcanoes.filter((f) => (f.detail ?? '').startsWith('dormant ')));
@@ -91,9 +99,9 @@
     ];
     if (largestSettlement) out.push({ text: `${name(largestSettlement)} is the largest settlement, with an estimated population of ${fmt(population(largestSettlement))}.`, tag: 'PEOPLE', feature: largestSettlement });
     if (highestPeak) out.push({ text: `${name(highestPeak)} is the highest named summit at ${fmt(Math.round(highestPeak.elev_ft ?? 0))} ft above sea level.`, tag: 'TERRAIN', feature: highestPeak });
-    if (longestRiver) out.push({ text: `${name(longestRiver)} is the longest named river at about ${fmtMiles(miles(longestRiver.extent_ft))} miles.`, tag: 'WATER', feature: longestRiver });
+    if (longestRiver) out.push({ text: `${name(longestRiver)} is the longest named river at about ${fmtMiles(longestRiver.length_mi ?? miles(longestRiver.extent_ft))} miles.`, tag: 'WATER', feature: longestRiver });
     if (largestRiverBasin) out.push({ text: `${name(largestRiverBasin)} drains the largest modeled catchment, about ${fmtMiles(largestRiverBasin.drainage_area_mi2 ?? 0)} square miles, at stream order ${largestRiverBasin.stream_order ?? 1}.`, tag: 'HYDROLOGY', feature: largestRiverBasin });
-    if (largestLake) out.push({ text: `${name(largestLake)} is the largest generated lake-type feature by stored extent, about ${fmtMiles(areaSqMi(largestLake.extent_ft))} square miles.`, tag: 'WATER', feature: largestLake });
+    if (largestLake) out.push({ text: `${name(largestLake)} is the largest generated lake-type feature by stored extent, about ${fmtMiles(largestLake.area_mi2 ?? areaSqMi(largestLake.extent_ft))} square miles.`, tag: 'WATER', feature: largestLake });
     if (largestLandmass) out.push({ text: `${name(largestLandmass)} is the largest generated landmass by stored extent, about ${fmtMiles(areaSqMi(largestLandmass.extent_ft))} square miles.`, tag: 'GEOGRAPHY', feature: largestLandmass });
     if (highestWaterfall) out.push({ text: `${name(highestWaterfall)} has the greatest named waterfall drop at about ${fmt(drop(highestWaterfall))} ft.`, tag: 'WATER', feature: highestWaterfall });
     if (largestRange) out.push({ text: `${name(largestRange)} is the longest generated mountain-range feature by its stored extent.`, tag: 'TERRAIN', feature: largestRange });
@@ -142,7 +150,7 @@
 
   const settlementRank = $derived([...settlements].sort((a, b) => population(b) - population(a) || a.name.localeCompare(b.name)));
   const peakRank = $derived([...peaks].sort((a, b) => (b.elev_ft ?? 0) - (a.elev_ft ?? 0)));
-  const riverRank = $derived([...rivers].sort((a, b) => b.extent_ft - a.extent_ft));
+  const riverRank = $derived([...rivers].sort((a, b) => (b.length_mi ?? miles(b.extent_ft)) - (a.length_mi ?? miles(a.extent_ft))));
   const lakeRank = $derived([...lakes].sort((a, b) => b.extent_ft - a.extent_ft));
   const regionRank = $derived([...regionCounts]);
 
@@ -195,6 +203,14 @@
         <div><span>Mountain ranges</span><b>{fmt(ranges.length)}</b></div>
         <div><span>Named rivers</span><b>{fmt(rivers.length)}</b></div>
         <div><span>Volcanoes</span><b>{fmt(volcanoes.length)}</b></div>
+        <div><span>Total named river miles</span><b>{fmtMiles(totalRiverMiles)} mi</b></div>
+        <div><span>Ocean rivers</span><b>{fmt(oceanRivers.length)}</b></div>
+        <div><span>Inland-lake rivers</span><b>{fmt(inlandLakeRivers.length)}</b></div>
+        <div><span>Dry rivers</span><b>{fmt(dryRivers.length)}</b></div>
+        <div><span>Lake-fed rivers</span><b>{fmt(lakeFedRivers.length)}</b></div>
+        <div><span>Terminal lakes</span><b>{fmt(terminalLakes.length)}</b></div>
+        <div><span>Flow-through lakes</span><b>{fmt(flowThroughLakes.length)}</b></div>
+        <div><span>Highest stream order</span><b>{fmt(highestOrderRiver?.stream_order ?? 0)}</b></div>
       </div>
     </section>
 
@@ -202,8 +218,8 @@
       <h3>Natural extremes</h3>
       <div class="extremes">
         {#if highestPeak}<button onclick={() => selectFeature(highestPeak)}><Icon name="mountain" size={15} /><span>Highest peak<small>{name(highestPeak)}</small></span><b>{fmt(Math.round(highestPeak.elev_ft ?? 0))} ft</b></button>{/if}
-        {#if longestRiver}<button onclick={() => selectFeature(longestRiver)}><Icon name="river" size={15} /><span>Longest river<small>{name(longestRiver)}</small></span><b>{fmtMiles(miles(longestRiver.extent_ft))} mi</b></button>{/if}
-        {#if largestLake}<button onclick={() => selectFeature(largestLake)}><Icon name="waves" size={15} /><span>Largest lake-type feature<small>{name(largestLake)}</small></span><b>{fmtMiles(areaSqMi(largestLake.extent_ft))} mi²</b></button>{/if}
+        {#if longestRiver}<button onclick={() => selectFeature(longestRiver)}><Icon name="river" size={15} /><span>Longest river<small>{name(longestRiver)}</small></span><b>{fmtMiles(longestRiver.length_mi ?? miles(longestRiver.extent_ft))} mi</b></button>{/if}
+        {#if largestLake}<button onclick={() => selectFeature(largestLake)}><Icon name="waves" size={15} /><span>Largest lake-type feature<small>{name(largestLake)}</small></span><b>{fmtMiles(largestLake.area_mi2 ?? areaSqMi(largestLake.extent_ft))} mi²</b></button>{/if}
         {#if highestWaterfall}<button onclick={() => selectFeature(highestWaterfall)}><Icon name="waves" size={15} /><span>Highest waterfall<small>{name(highestWaterfall)}</small></span><b>{fmt(drop(highestWaterfall))} ft</b></button>{/if}
       </div>
     </section>
@@ -279,7 +295,7 @@
             <span class="rank">{i + 1}</span>
             <span class="icon"><Icon name="mountain" size={15} /></span>
             <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
-            <strong>{fmtMiles(miles(f.extent_ft))} mi</strong>
+            <strong>{fmtMiles(f.length_mi ?? miles(f.extent_ft))} mi</strong>
           </button>
         {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
       </section>
@@ -304,7 +320,7 @@
             <span class="rank">{i + 1}</span>
             <span class="icon"><Icon name="river" size={15} /></span>
             <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
-            <strong>{fmtMiles(miles(f.extent_ft))} mi</strong>
+            <strong>{fmtMiles(f.length_mi ?? miles(f.extent_ft))} mi</strong>
           </button>
         {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
       </section>
@@ -326,7 +342,7 @@
             <span class="rank">{i + 1}</span>
             <span class="icon"><Icon name="waves" size={15} /></span>
             <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
-            <strong>{fmtMiles(areaSqMi(f.extent_ft))} mi²</strong>
+            <strong>{fmtMiles(f.area_mi2 ?? areaSqMi(f.extent_ft))} mi²</strong>
           </button>
         {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
       </section>
@@ -360,7 +376,7 @@
             <span class="rank">{i + 1}</span>
             <span class="icon"><Icon name="river" size={15} /></span>
             <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
-            <strong>{fmtMiles(miles(f.extent_ft))} mi</strong>
+            <strong>{fmtMiles(f.length_mi ?? miles(f.extent_ft))} mi</strong>
           </button>
         {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
       </section>
@@ -382,7 +398,7 @@
             <span class="rank">{i + 1}</span>
             <span class="icon"><Icon name="waves" size={15} /></span>
             <span class="name">{f.name}<small>{f.kind.replace('_', ' ')}</small></span>
-            <strong>{fmtMiles(areaSqMi(f.extent_ft))} mi²</strong>
+            <strong>{fmtMiles(f.area_mi2 ?? areaSqMi(f.extent_ft))} mi²</strong>
           </button>
         {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
       </section>
