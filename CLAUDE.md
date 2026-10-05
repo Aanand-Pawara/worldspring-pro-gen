@@ -1,7 +1,10 @@
 # Worldspring
 
-Google-Maps-style procedural D&D world: continent → battlemap zoom in the browser.
-Implementation plan (milestones M0–M9): `~/.claude/plans/pasted-content-id-4ec8-help-me-lexical-raccoon.md`.
+Google-Maps-style procedural fantasy world for tabletop games: continent → battlemap zoom in the browser.
+Public at github.com/Dun-John/worldspring (source, all rights reserved) and https://dun-john.github.io/worldspring/.
+Local notes, not in the repo: `docs/authoring-handoff.md` (git-ignored: current state, backlog, the user's decisions;
+read it at the start of a session) and the original plan (milestones M0–M9, all delivered) in
+`~/.claude/plans/pasted-content-id-4ec8-help-me-lexical-raccoon.md`.
 
 ## Layout
 - `crates/worldgen` — pure deterministic generator (Rust). No I/O, no threads inside generators,
@@ -35,10 +38,12 @@ Implementation plan (milestones M0–M9): `~/.claude/plans/pasted-content-id-4ec
   (`render/Sewers.ts`: sections stream round the view, textures prepared in `underField.worker.ts`);
   a section's undercroft opens on its own. In play mode the sewer level is one location `w:<layout>`.
 - `scripts/` — `build-wasm.mjs`, `det-wasm.mjs`, `bench.mjs`, `shot.mjs`, `publish.mjs`, `readme-media.mjs`.
-- `README.md` (the public face on GitHub) with its pictures in `docs/media/`; the source is public on GitHub
-  (github.com/Dun-John/worldspring, `main`, all rights reserved), the built site on its `gh-pages` branch.
+- `README.md` — the repo's front page (using the site, running it, license), pictures in `docs/media/`;
+  `THIRD_PARTY_NOTICES.md` — notices for code that follows others' work (Lucide icons).
 
 ## Commands
+- First time: `npm --prefix app install` (also brings `wasm-opt`); Rust with the `wasm32-unknown-unknown` target and
+  `cargo install wasm-bindgen-cli --version 0.2.129` (must match `Cargo.lock`).
 - `npm run wasm` — build WASM into `app/src/gen/pkg` (required before `npm run dev`).
 - `npm run dev` — dev server on :5173. `?seed=N` picks a world, `?bench=1` runs the perf fly-through
   (mountain, region, continent, then down into the biggest city), `?bench=play` the play-mode one (30 tokens,
@@ -53,11 +58,10 @@ Implementation plan (milestones M0–M9): `~/.claude/plans/pasted-content-id-4ec
 - `npm run mapd` — the agent server on 127.0.0.1:7777 (`-- --port N --dir worlds --app app/dist`); the app on
   localhost connects to it by itself (`?mapd=PORT` for another port, `?mapd=0` for none). Never expose it
   through the reverse proxy. Claude Code: `claude mcp add --transport http worldspring http://127.0.0.1:7777/mcp`.
-- `npm run publish` — builds the app for GitHub Pages and force-pushes it as one commit to the repo's `gh-pages`
-  branch (the `site` remote; commits use `git config site.email`, a GitHub noreply address). Every generator
-  published stays on the site as its own build (`v<N>/`, listed in
-  `versions.json`); a world from an older one asks to open as it was made or upgrade (`world/versions.ts`, App
-  `settleVersion`).
+- `npm run publish` — updates the live site: builds the app for GitHub Pages and force-pushes it as one commit to the
+  repo's `gh-pages` branch (the `site` remote; commits use `git config site.email`, a GitHub noreply address). Every
+  generator published stays on the site as its own build (`v<N>/`, listed in `versions.json`); a world from an older
+  one asks to open as it was made or upgrade (`world/versions.ts`, App `settleVersion`).
 - `cargo test --release -p worldgen` — the vital checks (`tests/vital.rs`).
 - `npm run det` — WASM vs native byte-identical check.
 - `npm run check` — svelte-check / TypeScript.
@@ -102,6 +106,21 @@ Implementation plan (milestones M0–M9): `~/.claude/plans/pasted-content-id-4ec
   libm's software versions are several times slower in WASM). Lookup maps use `core::hash::FastMap`/`FastSet`.
 - Tests: only vital requirements (determinism, seams/consistency, terrain invariants, battlemap
   guarantee, perf). No per-module unit suites or smoke tests.
-- Perf floor: this laptop (Iris Xe) must hold ≥ 30 fps 1% lows in the `?bench=1`, `?bench=play`, `?bench=sewer`,
-  `?bench=dungeon` and `?bench=edit` runs.
-- Sprites/images: generate with `codex exec` (image generation).
+- Perf floor: the reference laptop (Intel Iris Xe) must hold ≥ 30 fps 1% lows in the `?bench=1`, `?bench=play`,
+  `?bench=sewer`, `?bench=dungeon` and `?bench=edit` runs.
+- Sprites: drawn procedurally (`DRAW` in `render/atlas.ts`; furniture and underground props by `InteriorLayer.drawItem`,
+  cached in `render/itemAtlas.ts`), in the
+  hand-drawn cartoon style the user approves batch by batch (`?gallery=1` shows them all). Generated images
+  (`codex exec`) were tried and dropped.
+
+## Git and publishing
+- The repo is public: `master` tracks `origin/main`, so a push publishes the source. Commit freely; push only when
+  the user asks. Pushing the source doesn't update the site: that's `npm run publish`.
+- Never push `private-history` (the pre-public history: it names the user's hosts and personal email) or branches
+  built on it (`underdark-wip`: bring its work over by cherry-pick or diff). Commits use the GitHub noreply address
+  (this repo's `user.email`).
+- Never commit private hosts, emails, keys or local paths: the reverse proxy's `allowedHosts` line in
+  `app/vite.config.ts` stays uncommitted, and `docs/authoring-handoff.md` stays git-ignored.
+- No license (the user's choice: all rights reserved, source published to be read); don't add one unasked. Code
+  that follows someone else's gets its notice in `THIRD_PARTY_NOTICES.md`.
+- After visual changes the user wants shown, re-run `scripts/readme-media.mjs` so the README matches the site.
