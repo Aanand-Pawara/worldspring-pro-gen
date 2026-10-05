@@ -146,7 +146,13 @@ impl RiverCurve {
         let s = lerp(self.s[k], self.s[k1]);
         let phase = lerp(self.phase[k], self.phase[k1]);
         let taper = lerp(self.taper[k] as f64, self.taper[k1] as f64);
-        let w = width_ft(q);
+
+        // Hydraulic geometry is not the whole story: steep, confined reaches tend to be
+        // narrower, while low-gradient alluvial reaches can spread wider at the same discharge.
+        // Keep this correction modest so discharge remains the dominant control.
+        let local_slope = ((self.z[k] as f64 - self.z[k1] as f64) / (self.s[k1] - self.s[k]).max(1.0)).max(0.0);
+        let confinement = 0.82 + 0.36 * (1.0 - smoothstep(0.001, 0.02, local_slope));
+        let w = width_ft(q) * confinement;
         let lambda = wavelength_ft(w);
 
         // Sinuosity from the slope at each control point (centred difference), interpolated,
