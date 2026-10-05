@@ -449,6 +449,7 @@ fn chain_length_ft(w: usize, cells: &[u32], cell_ft: f64) -> f64 {
         let dy = (a / w) as f64 - (b / w) as f64;
         crate::core::sqrt(dx * dx + dy * dy) * cell_ft
     }).sum()
+}
 
 #[cfg(test)]
 mod tests {
