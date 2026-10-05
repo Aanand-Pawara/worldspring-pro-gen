@@ -95,7 +95,7 @@
     <div class="counter">Fact {((shown % facts.length) + 1).toLocaleString()} of {facts.length.toLocaleString()}</div>
   {:else}
     <div class="empty">
-      <Icon name="info" size={18} />
+      <Icon name="help" size={18} />
       <span>The world has not finished generating, so there are no facts yet.</span>
     </div>
   {/if}
