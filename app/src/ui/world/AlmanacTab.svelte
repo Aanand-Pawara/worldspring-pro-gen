@@ -116,6 +116,30 @@
     onSelect(f);
   }
 
+  function selectMode(next: 'overview' | 'facts' | 'rankings') {
+    mode = next;
+  }
+
+  function selectRanking(next: 'settlements' | 'terrain' | 'water' | 'regions') {
+    ranking = next;
+  }
+
+  function handleModePointer(e: PointerEvent) {
+    e.stopPropagation();
+    const button = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-mode]');
+    if (!button || button.disabled) return;
+    const next = button.dataset.mode;
+    if (next === 'overview' || next === 'facts' || next === 'rankings') selectMode(next);
+  }
+
+  function handleRankingPointer(e: PointerEvent) {
+    e.stopPropagation();
+    const button = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-ranking]');
+    if (!button || button.disabled) return;
+    const next = button.dataset.ranking;
+    if (next === 'settlements' || next === 'terrain' || next === 'water' || next === 'regions') selectRanking(next);
+  }
+
   const settlementRank = $derived([...settlements].sort((a, b) => population(b) - population(a) || a.name.localeCompare(b.name)));
   const peakRank = $derived([...peaks].sort((a, b) => (b.elev_ft ?? 0) - (a.elev_ft ?? 0)));
   const riverRank = $derived([...rivers].sort((a, b) => b.extent_ft - a.extent_ft));
@@ -142,10 +166,10 @@
     </div>
   </header>
 
-  <nav class="subtabs" aria-label="Almanac views">
-    <button type="button" class:on={mode === 'overview'} onclick={(e) => { e.stopPropagation(); mode = 'overview'; }}><Icon name="globe" size={14} /> Overview</button>
-    <button type="button" class:on={mode === 'facts'} onclick={(e) => { e.stopPropagation(); mode = 'facts'; }}><Icon name="dice" size={14} /> Facts</button>
-    <button type="button" class:on={mode === 'rankings'} onclick={(e) => { e.stopPropagation(); mode = 'rankings'; }}><Icon name="activity" size={14} /> Rankings</button>
+  <nav class="subtabs" aria-label="Almanac views" onpointerup={handleModePointer}>
+    <button type="button" data-mode="overview" aria-pressed={mode === 'overview'} class:on={mode === 'overview'} onclick={() => selectMode('overview')}><Icon name="globe" size={14} /> Overview</button>
+    <button type="button" data-mode="facts" aria-pressed={mode === 'facts'} class:on={mode === 'facts'} onclick={() => selectMode('facts')}><Icon name="dice" size={14} /> Facts</button>
+    <button type="button" data-mode="rankings" aria-pressed={mode === 'rankings'} class:on={mode === 'rankings'} onclick={() => selectMode('rankings')}><Icon name="activity" size={14} /> Rankings</button>
   </nav>
 
   {#if !overlay}
@@ -205,11 +229,11 @@
     {/if}
     <div class="fact-note">Facts are calculated from generated data. Proximity facts use named feature anchors, so they never pretend we have a road network or historical record when we don't.</div>
   {:else}
-    <nav class="rank-tabs" aria-label="Ranking categories">
-      <button class:on={ranking === 'settlements'} onclick={(e) => { e.stopPropagation(); ranking = 'settlements'; }}>Settlements</button>
-      <button class:on={ranking === 'terrain'} onclick={(e) => { e.stopPropagation(); ranking = 'terrain'; }}>Terrain</button>
-      <button class:on={ranking === 'water'} onclick={() => (ranking === 'water')}>Water</button>
-      <button class:on={ranking === 'regions'} onclick={(e) => { e.stopPropagation(); ranking = 'regions'; }}>Biomes</button>
+    <nav class="rank-tabs" aria-label="Ranking categories" onpointerup={handleRankingPointer}>
+      <button type="button" data-ranking="settlements" aria-pressed={ranking === 'settlements'} class:on={ranking === 'settlements'} onclick={() => selectRanking('settlements')}>Settlements</button>
+      <button type="button" data-ranking="terrain" aria-pressed={ranking === 'terrain'} class:on={ranking === 'terrain'} onclick={() => selectRanking('terrain')}>Terrain</button>
+      <button type="button" data-ranking="water" aria-pressed={ranking === 'water'} class:on={ranking === 'water'} onclick={() => selectRanking('water')}>Water</button>
+      <button type="button" data-ranking="regions" aria-pressed={ranking === 'regions'} class:on={ranking === 'regions'} onclick={() => selectRanking('regions')}>Biomes</button>
     </nav>
 
     {#if ranking === 'settlements'}
