@@ -396,7 +396,9 @@
   /** The world the settings panel describes (not generated yet), without sketch or edits. */
   function draftWorld(): WorldFile {
     const { edits: _, sketch: __, ...rest } = world;
-    return draft ? { ...rest, seed: draft.seed, params: $state.snapshot(draft.params) } : rest;
+    // (From the panel's draft itself: `draft` follows it only once effects run, after the
+    // handler that changed it, e.g. Random setting a seed and generating at once.)
+    return { ...rest, seed: worldDraft.seed >>> 0, params: $state.snapshot(worldDraft.p) as WorldParams };
   }
 
   function onDraft(seed: number, params: WorldParams) {
