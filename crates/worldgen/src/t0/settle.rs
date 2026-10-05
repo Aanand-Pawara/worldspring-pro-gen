@@ -274,13 +274,24 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         // A settlement of this tier at cell `k`, standing at (x, y) ft.
         let make = |k: usize, rng: &mut Pcg32, x: f64, y: f64, capital: bool, pin: Option<u32>| {
             let (cx, cy) = ((k % w) as f64, (k / w) as f64);
+            // Population is a deterministic estimate of settlement capacity, not just a
+            // random number inside a tier. Fertility, water, terrain, altitude, roads and
+            // settlement type all push the result toward a plausible medieval-sized place.
             let (lo, hi) = match tier {
-                Tier::Metropolis => (25_000.0, 80_000.0),
-                Tier::City => (5_000.0, 25_000.0),
-                Tier::Town => (500.0, 5_000.0),
-                Tier::Village => (50.0, 500.0),
+                Tier::Metropolis => (80_000.0, 350_000.0),
+                Tier::City => (15_000.0, 120_000.0),
+                Tier::Town => (2_000.0, 20_000.0),
+                Tier::Village => (80.0, 2_000.0),
             };
-            let population = (lo * libm::pow(hi / lo, rng.next_f64())) as u32;
+            let habitat = (score[k] / 2.2).clamp(0.35, 1.0);
+            let water_bonus = if coastal[k] || harbour[k] { 1.16 } else if on_river[k] { 1.10 } else { 1.0 };
+            let road_bonus = road_bonus(k, tier).min(5.0);
+            let road_factor = 1.0 + 0.10 * (road_bonus - 1.0).min(4.0);
+            let altitude_factor = (1.0 - 0.22 * smoothstep(2_500.0, 7_500.0, inp.height[k] - sea)).max(0.72);
+            let kind_factor = if above := inp.height[k] - sea; above > 2_500.0 && tier >= Tier::Town { 0.92 } else { 1.0 };
+            let capacity = (habitat * water_bonus * road_factor * altitude_factor * kind_factor).clamp(0.35, 1.45);
+            let raw = lo * libm::pow(hi / lo, rng.next_f64()) * capacity;
+            let population = raw.round().clamp(lo * 0.5, hi * 1.15) as u32;
             let b = biome_of(k);
             let above = inp.height[k] - sea;
             let ore = fbm(ore_seed, cx / 12.0, cy / 12.0, 3, 2.0, 0.5);
