@@ -2,7 +2,7 @@
 // world's modes (playing, sketching, designing, tools armed) stay in App. Phones in portrait get
 // a bottom sheet and a tab bar; everything else (short landscape phones too) a dock on the right.
 export type Section = 'world' | 'edit' | 'notes' | 'play';
-export type WorldTab = 'generate' | 'sketch' | 'library' | 'stats' | 'facts';
+export type WorldTab = 'generate' | 'sketch' | 'almanac' | 'library';
 export type EditTab = 'names' | 'sites' | 'build' | 'scatter' | 'design';
 export type NotesTab = 'npcs' | 'plots' | 'places';
 export type Tabs = { world: WorldTab; edit: EditTab; notes: NotesTab };
