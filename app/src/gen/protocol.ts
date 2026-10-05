@@ -417,6 +417,19 @@ export interface Feature {
   drainage_area_mi2?: number;
   discharge_index?: number;
   tributary_count?: number;
+  /** True river length in miles, following the T0 receiver path. */
+  length_mi?: number;
+  /** Stable drainage basin identity shared by tributary chains. */
+  basin_id?: number;
+  /** River terminal type. */
+  river_mouth?: 'ocean' | 'lake' | 'dry' | 'confluence';
+  source_lake_id?: number;
+  mouth_lake_id?: number;
+  /** Hydrology metadata for lake-type features. */
+  area_mi2?: number;
+  max_depth_ft?: number;
+  inlet_count?: number;
+  has_outlet?: boolean;
 }
 
 export interface Overlay {
