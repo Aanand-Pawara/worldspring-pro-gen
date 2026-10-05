@@ -24,6 +24,24 @@ fn determinism_repeatable() {
 /// Terrain logic: every river flows strictly downhill from source to mouth, and ends in the
 /// sea, a lake, a confluence, or dries out (never climbs through terrain).
 #[test]
+fn drainage_basins_are_stable_and_complete() {
+    for seed in [3u32, 99] {
+        let world = World::from_json(&world_json(seed)).unwrap();
+        let t0 = worldgen::t0::T0::generate(&world);
+        let h = &t0.extra.as_ref().unwrap().hydro;
+        assert_eq!(h.basin_id.len(), t0.land.len());
+        for i in 0..t0.land.len() {
+            if !t0.land[i] { continue; }
+            assert_ne!(h.basin_id[i], 0, "seed {seed}: land cell {i} has no basin");
+        }
+        for r in &h.rivers {
+            let source = r.cells[0] as usize;
+            assert_eq!(r.basin_id, h.basin_id[source], "seed {seed}: river basin differs from source cell");
+        }
+    }
+}
+
+#[test]
 fn rivers_flow_downhill() {
     for seed in [3u32, 99] {
         let world = World::from_json(&world_json(seed)).unwrap();

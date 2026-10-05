@@ -472,6 +472,7 @@ impl Builder<'_> {
         let w = inp.w;
         let chains = inp.hydro.rivers.clone();
         let mut falls: Vec<(f64, f64, f64, usize)> = Vec::new();
+        let mut rapids: Vec<(f64, f64, f64, usize)> = Vec::new();
         for r in chains {
             if r.cells.len() < 3 {
                 continue;
@@ -516,22 +517,25 @@ impl Builder<'_> {
             }
             let _ = q;
 
-            // Waterfalls: the steepest drop along the river, if it is a real knickpoint.
+            // Waterfalls and rapids: classify sharp downhill channel steps from terrain.
             let mut best: Option<(f64, usize)> = None;
-            for k in 0..if named { r.cells.len() - 1 } else { 0 } {
+            for k in 0..r.cells.len().saturating_sub(1) {
                 let (a, b) = (r.cells[k] as usize, r.cells[k + 1] as usize);
-                if !inp.land[b] || inp.hydro.lake_of[b] != super::hydro::NO_LAKE {
-                    continue;
-                }
+                if !inp.land[b] || inp.hydro.lake_of[b] != super::hydro::NO_LAKE { continue; }
                 let drop = inp.height[a] - inp.height[b];
-                if drop >= 400.0 && drop / inp.cell_ft >= 0.06 && best.is_none_or(|(d, _)| drop > d) {
+                let grade = drop / inp.cell_ft;
+                if drop >= 400.0 && grade >= 0.06 && best.is_none_or(|(d, _)| drop > d) {
                     best = Some((drop, k));
+                } else if drop >= 120.0 && grade >= 0.02 {
+                    let (cx, cy) = ((a % w) as f64 + 0.5 * ((b % w) as f64 - (a % w) as f64), (a / w) as f64 + 0.5 * ((b / w) as f64 - (a / w) as f64));
+                    rapids.push((drop, cx, cy, a));
                 }
             }
             if let Some((drop, k)) = best {
-                let c = r.cells[k] as usize;
-                let (cx, cy) = ((c % w) as f64 + 0.5 * ((r.cells[k + 1] as usize % w) as f64 - (c % w) as f64), (c / w) as f64 + 0.5 * ((r.cells[k + 1] as usize / w) as f64 - (c / w) as f64));
-                falls.push((drop, cx, cy, c));
+                let a = r.cells[k] as usize;
+                let b = r.cells[k + 1] as usize;
+                let (cx, cy) = ((a % w) as f64 + 0.5 * ((b % w) as f64 - (a % w) as f64), (a / w) as f64 + 0.5 * ((b / w) as f64 - (a / w) as f64));
+                falls.push((drop, cx, cy, a));
             }
         }
         // Only the most dramatic drops become named landmarks.
@@ -539,6 +543,16 @@ impl Builder<'_> {
         for &(drop, cx, cy, c) in falls.iter().take(20) {
             let elev = self.above_sea(c);
             self.push("waterfall", NameKind::Waterfall, cx, cy, 0.0, 30.0 * inp.cell_ft, Some(elev.round()), Some(format!("drop ~{} ft", fmt_thousands(drop))));
+        }
+        rapids.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.3.cmp(&b.3)));
+        let mut placed = Vec::<(f64, f64)>::new();
+        let min_sep = 6.0 * inp.cell_ft;
+        for &(drop, cx, cy, c) in &rapids {
+            if placed.iter().any(|&(x, y)| (x - cx).hypot(y - cy) < min_sep) { continue; }
+            let elev = self.above_sea(c);
+            self.push("rapids", NameKind::Waterfall, cx, cy, 0.0, 20.0 * inp.cell_ft, Some(elev.round()), Some(format!("river drop ~{} ft", fmt_thousands(drop))));
+            placed.push((cx, cy));
+            if placed.len() >= 20 { break; }
         }
     }
 

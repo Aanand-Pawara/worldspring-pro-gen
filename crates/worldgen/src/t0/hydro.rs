@@ -83,6 +83,8 @@ pub struct Hydro {
     pub water: Vec<f32>,
     /// Number of routed land cells contributing to each active cell.
     pub flow_accumulation: Vec<u32>,
+    /// Stable drainage-basin identity for every land cell.
+    pub basin_id: Vec<u64>,
     pub discharge: Vec<f32>,
     pub lake_of: Vec<u32>,
     pub lakes: Vec<Lake>,
@@ -211,8 +213,9 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
     }
 
     let flow_accumulation = accumulate_flow(w, h, land, &lake_of, &rec, &fl.order);
-    let rivers = extract_rivers(w, h, cell_ft, land, &lake_of, &rec, &q, &flow_accumulation, RIVER_Q / river_density.max(0.05), &lakes);
-    Hydro { water, flow_accumulation, discharge: q.iter().map(|&v| v as f32).collect(), lake_of, lakes, rivers }
+    let basin_id = assign_basin_ids(w, h, land, &lake_of, &rec);
+    let rivers = extract_rivers(w, h, cell_ft, land, &lake_of, &rec, &q, &flow_accumulation, &basin_id, RIVER_Q / river_density.max(0.05), &lakes);
+    Hydro { water, flow_accumulation, basin_id, discharge: q.iter().map(|&v| v as f32).collect(), lake_of, lakes, rivers }
 }
 
 fn accumulate_flow(w: usize, h: usize, land: &[bool], _lake_of: &[u32], rec: &[u32], order: &[u32]) -> Vec<u32> {
@@ -228,7 +231,7 @@ fn accumulate_flow(w: usize, h: usize, land: &[bool], _lake_of: &[u32], rec: &[u
     acc
 }
 
-fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u32], rec: &[u32], q: &[f64], accumulation: &[u32], threshold: f64, lakes: &[Lake]) -> Vec<River> {
+fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u32], rec: &[u32], q: &[f64], accumulation: &[u32], basin_id: &[u64], threshold: f64, lakes: &[Lake]) -> Vec<River> {
     let n = w * h;
     let threshold = threshold.max(1.0);
     let mut lake_feed = vec![false; n];
@@ -422,23 +425,38 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
         chain.length_cells = chain.cells.len().min(u32::MAX as usize) as u32;
     }
     for id in 0..chains.len() {
-        let basin_id = if let Some(parent) = chains[id].into {
-            chains[parent].basin_id
-        } else {
-            let end = *chains[id].cells.last().unwrap_or(&0) as u64;
-            match chains[id].mouth {
-                Mouth::Ocean => end,
-                Mouth::Lake => 0x1_0000_0000u64 | chains[id].mouth_lake.unwrap_or(0) as u64,
-                Mouth::Dry => 0x2_0000_0000u64 | end,
-                Mouth::Confluence => end,
-            }
-        };
+        let source = *chains[id].cells.first().unwrap_or(&0) as usize;
+        let basin = basin_id.get(source).copied().unwrap_or(0);
         let drainage = chains[id].cells.iter().map(|&cc| accumulation[cc as usize]).max().unwrap_or(0);
-        chains[id].basin_id = basin_id;
+        chains[id].basin_id = basin;
         chains[id].drainage_area_cells = drainage;
         chains[id].length_ft = chain_length_ft(w, &chains[id].cells, cell_ft);
     }
     chains
+}
+
+fn assign_basin_ids(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32]) -> Vec<u64> {
+    let n = w * h;
+    let mut out = vec![0u64; n];
+    let mut done = vec![false; n];
+    for i in 0..n {
+        if !land[i] || done[i] { continue; }
+        let mut path = Vec::<usize>::new();
+        let mut cur = i;
+        let basin = loop {
+            if done[cur] { break out[cur]; }
+            if lake_of[cur] != NO_LAKE { break 0x1_0000_0000u64 | lake_of[cur] as u64; }
+            let r = rec[cur] as usize;
+            if r == cur { break 0x2_0000_0000u64 | cur as u64; }
+            if !land[r] { break 0x3_0000_0000u64 | r as u64; }
+            path.push(cur);
+            cur = r;
+        };
+        for p in path { out[p] = basin; done[p] = true; }
+        out[i] = basin;
+        done[i] = true;
+    }
+    out
 }
 
 fn chain_length_ft(w: usize, cells: &[u32], cell_ft: f64) -> f64 {
@@ -464,6 +482,17 @@ mod tests {
         assert_eq!(acc, vec![1, 3, 4, 1]);
     }
     #[test]
+    fn basin_ids_follow_receiver_terminals() {
+        let land = vec![true, true, true, true, false];
+        let lake = vec![NO_LAKE, NO_LAKE, 0, NO_LAKE, NO_LAKE];
+        let rec = vec![1, 2, 2, 4, 4];
+        let ids = assign_basin_ids(5, 1, &land, &lake, &rec);
+        assert_eq!(ids[0], ids[1]);
+        assert_eq!(ids[2], 0x1_0000_0000);
+        assert_eq!(ids[3], 0x3_0000_0004);
+    }
+
+    #[test]
     fn lake_cells_contribute_to_downstream_accumulation() {
         let land = vec![true, true, true];
         let lake = vec![NO_LAKE, 0, NO_LAKE];
@@ -488,7 +517,8 @@ mod tests {
             outlet: Some(1),
             inlet_count: 1,
         }];
-        let rivers = extract_rivers(4, 1, 1.0, &land, &lake, &rec, &q, &acc, 20_000.0, &lakes);
+        let basin = vec![0x2_0000_0000, 0x1_0000_0000, 0x3_0000_0003, 0];
+        let rivers = extract_rivers(4, 1, 1.0, &land, &lake, &rec, &q, &acc, &basin, 20_000.0, &lakes);
         assert_eq!(rivers.len(), 1);
         assert_eq!(rivers[0].source_lake, Some(0));
         assert_eq!(rivers[0].mouth, Mouth::Ocean);
