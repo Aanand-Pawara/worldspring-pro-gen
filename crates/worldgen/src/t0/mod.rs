@@ -218,7 +218,7 @@ impl T0 {
         progress("climate", 0.0);
         let clim = climate::build(world, w, h, cell, &height, &land);
         progress("rivers", 0.0);
-        let hydro = hydro::build(w, h, &mut height, &land, &clim, sea, p.river_density, &feed);
+        let hydro = hydro::build(w, h, cell, &mut height, &land, &clim, sea, p.river_density, &feed);
 
         progress("biomes", 0.0);
         let vents = volcanoes
