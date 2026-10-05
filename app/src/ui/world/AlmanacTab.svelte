@@ -141,9 +141,9 @@
   </header>
 
   <nav class="subtabs" aria-label="Almanac views">
-    <button class:on={mode === 'overview'} onclick={() => (mode = 'overview')}><Icon name="globe" size={14} /> Overview</button>
-    <button class:on={mode === 'facts'} onclick={() => (mode = 'facts')}><Icon name="dice" size={14} /> Facts</button>
-    <button class:on={mode === 'rankings'} onclick={() => (mode = 'rankings')}><Icon name="activity" size={14} /> Rankings</button>
+    <button type="button" class:on={mode === 'overview'} onclick={() => { mode = 'overview'; }}><Icon name="globe" size={14} /> Overview</button>
+    <button type="button" class:on={mode === 'facts'} onclick={() => { mode = 'facts'; }}><Icon name="dice" size={14} /> Facts</button>
+    <button type="button" class:on={mode === 'rankings'} onclick={() => { mode = 'rankings'; }}><Icon name="activity" size={14} /> Rankings</button>
   </nav>
 
   {#if !overlay}

@@ -44,6 +44,7 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
             extent_ft: if c.kind == "building" { 0.5 * MI } else { 2.0 * MI },
             elev_ft: Some(t0.sample(c.x, c.y, t0.cell_ft).round()),
             detail: Some(created_detail(c)),
+            river_path: None,
         });
     }
     for f in &mut out {
