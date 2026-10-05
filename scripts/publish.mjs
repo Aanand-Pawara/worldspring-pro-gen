@@ -20,19 +20,21 @@ const tryGit = (args) => {
 
 /** The branch GitHub Pages serves. */
 const BRANCH = 'gh-pages';
-const remote = tryGit(['remote', 'get-url', 'site']);
+// Prefer an explicit `site` remote, but fall back to `origin` so forks publish to themselves out of the box.
+const remote = tryGit(['remote', 'get-url', 'site']) || tryGit(['remote', 'get-url', 'origin']);
 const m = /github\.com[/:]([^/]+)\/([^/]+?)(\.git)?$/.exec(remote);
 if (!m) {
-  console.error('No `site` remote on GitHub. Add one: git remote add site https://github.com/<user>/<repo>.git');
+  console.error('No GitHub remote found. Set `origin` or add a `site` remote.');
   process.exit(1);
 }
 const [, user, repo] = m;
-const email = tryGit(['config', 'site.email']);
+const email = tryGit(['config', 'site.email']) || tryGit(['config', 'user.email']) ||
+  (process.env.GITHUB_ACTIONS ? `${process.env.GITHUB_ACTOR || user}@users.noreply.github.com` : '');
 if (!email) {
-  console.error('Set the commit email for the public site (your GitHub noreply address): git config site.email <id>+<user>@users.noreply.github.com');
+  console.error('Set the commit email for the public site: git config site.email <id>+<user>@users.noreply.github.com');
   process.exit(1);
 }
-const name = tryGit(['config', 'user.name']) || user;
+const name = tryGit(['config', 'user.name']) || process.env.GITHUB_ACTOR || user;
 
 const head = git(['rev-parse', '--short', 'HEAD']);
 const dirty = git(['status', '--porcelain', '--untracked-files=no']) !== '';
