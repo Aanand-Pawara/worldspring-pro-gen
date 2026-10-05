@@ -213,7 +213,17 @@
       <Rank title="Largest lake-type features" items={lakeRank.slice(0, 15)} value={(f) => fmtMiles(areaSqMi(f.extent_ft))} suffix=" mi²" icon="waves" {selectFeature} />
       <Rank title="Greatest waterfalls" items={[...waterfalls].sort((a, b) => drop(b) - drop(a)).slice(0, 10)} value={(f) => fmt(drop(f))} suffix=" ft" icon="waves" {selectFeature} />
     {:else}
-      <Rank title="Most represented named biome regions" items={regionRank.map(([kind, count]) => ({ id: `region:${kind}`, kind, name: kind.replace('_', ' '), x: 0, y: 0, angle: 0, extent_ft: 0, detail: `${count} named regions` }))} value={(f) => f.detail?.split(' ')[0] ?? '0'} suffix=" regions" icon="land" {selectFeature} />
+      <section>
+        <h3>Most represented named biome regions</h3>
+        {#each regionRank as [kind, count], i (kind)}
+          <div class="row region-row">
+            <span class="rank">{i + 1}</span>
+            <span class="icon"><Icon name="land" size={15} /></span>
+            <span class="name">{kind.replace('_', ' ')}<small>generated named regions</small></span>
+            <strong>{fmt(count)}</strong>
+          </div>
+        {:else}<div class="empty">No named biome regions generated.</div>{/each}
+      </section>
     {/if}
   {/if}
 </div>
