@@ -86,6 +86,8 @@ pub enum NameKind {
     Plains,
     Tundra,
     Glacier,
+    Plateau,
+    Valley,
     Settlement,
     Ruin,
     Tower,
@@ -221,6 +223,10 @@ impl Namer {
             (LavaTube, 0 | 1) => format!("The {w} Tubes"),
             (LavaTube, _) => format!("The {adj} Lava Tubes"),
             (Glacier, _) => format!("The {w} Icefield"),
+            (Plateau, 0 | 1) => format!("The {adj} Plateau"),
+            (Plateau, _) => format!("{w} Plateau"),
+            (Valley, 0 | 1) => format!("The {adj} Valley"),
+            (Valley, _) => format!("{w} Valley"),
         }
     }
 }
