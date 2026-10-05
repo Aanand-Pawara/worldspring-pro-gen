@@ -434,7 +434,7 @@ impl Builder<'_> {
         let w = inp.w;
         let chains = inp.hydro.rivers.clone();
         let mut falls: Vec<(f64, f64, f64, usize)> = Vec::new();
-        for (ri, r) in chains.iter().enumerate() {
+        for r in chains {
             if r.cells.len() < 3 {
                 continue;
             }
