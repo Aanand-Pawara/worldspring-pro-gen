@@ -39,6 +39,7 @@ export class GenClient {
 
   private worker = new Worker(new URL('./coordinator.worker.ts', import.meta.url), { type: 'module' });
   private readyResolve: ((r: Ready) => void) | null = null;
+  private readyReject: ((reason?: unknown) => void) | null = null;
   private asks = new Map<number, (json: string) => void>();
   private nextAsk = 1;
 
@@ -50,12 +51,22 @@ export class GenClient {
       else if (m.type === 'progress') this.onProgress(m.stage, m.frac);
       else if (m.type === 'battlemap') this.onBattlemap(m.level, m.x, m.y, m.chunk, m.epoch);
       else if (m.type === 'catalog') this.onCatalog(JSON.parse(m.catalog) as KindInfo[]);
-      else if (m.type === 'ready')
-        this.readyResolve?.({ geom: m.geom, t0Ms: m.t0Ms, overlay: JSON.parse(m.overlay) as Overlay, catalog: JSON.parse(m.catalog) as KindInfo[] });
+      else if (m.type === 'ready') {
+        const resolve = this.readyResolve;
+        this.readyResolve = null;
+        this.readyReject = null;
+        resolve?.({ geom: m.geom, t0Ms: m.t0Ms, overlay: JSON.parse(m.overlay) as Overlay, catalog: JSON.parse(m.catalog) as KindInfo[] });
+      }
       else if (m.type === 'answer') {
         this.asks.get(m.id)?.(m.json);
         this.asks.delete(m.id);
-      } else if (m.type === 'error') this.onError(m.message);
+      } else if (m.type === 'error') {
+        const reject = this.readyReject;
+        this.readyResolve = null;
+        this.readyReject = null;
+        reject?.(new Error(m.message));
+        this.onError(m.message);
+      }
     };
   }
 
@@ -64,8 +75,9 @@ export class GenClient {
     this.sentFields = null;
     const cores = navigator.hardwareConcurrency || 4;
     const workers = Math.max(1, Math.min(6, cores - 2));
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       this.readyResolve = resolve;
+      this.readyReject = reject;
       this.send({ type: 'init', world, workers });
     });
   }
