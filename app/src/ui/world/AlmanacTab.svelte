@@ -5,15 +5,19 @@
   import FactPanel from './FactPanel.svelte';
   import { buildAlmanacModel, fmt, fmtMiles, population, miles, areaSqMi, drop, type AlmanacModel } from './almanac/model';
   import { buildKingdomColours, kingdomCssColour } from '../../gen/kingdomColors';
+  import { buildKingdomIndex, kingdomById } from '../../gen/kingdoms';
+  import KingdomDetail from './KingdomDetail.svelte';
 
   interface Props {
     world: WorldFile;
     overlay: Overlay | null;
     onSelect: (f: Feature) => void;
     onSelectKingdom: (id: number) => void;
+    kingdomId: number | null;
+    onCloseKingdom: () => void;
   }
 
-  let { world, overlay, onSelect, onSelectKingdom }: Props = $props();
+  let { world, overlay, onSelect, onSelectKingdom, kingdomId, onCloseKingdom }: Props = $props();
   let mode = $state<'overview' | 'facts' | 'rankings' | 'kingdoms'>('overview');
   let ranking = $state<'settlements' | 'terrain' | 'water' | 'regions'>('settlements');
   let shown = $state(0);
@@ -69,6 +73,8 @@
   const largestSettlement = $derived(model?.largestSettlement ?? null), highestPeak = $derived(model?.highestPeak ?? null), longestRiver = $derived(model?.longestRiver ?? null), largestRiverBasin = $derived(model?.largestRiverBasin ?? null), largestLake = $derived(model?.largestLake ?? null), largestLandmass = $derived(model?.largestLandmass ?? null), highestWaterfall = $derived(model?.highestWaterfall ?? null), largestRange = $derived(model?.largestRange ?? null);
   const oceanRivers = $derived(model?.oceanRivers ?? []), inlandLakeRivers = $derived(model?.inlandLakeRivers ?? []), dryRivers = $derived(model?.dryRivers ?? []), lakeFedRivers = $derived(model?.lakeFedRivers ?? []), terminalLakes = $derived(model?.terminalLakes ?? []), flowThroughLakes = $derived(model?.flowThroughLakes ?? []), totalRiverMiles = $derived(model?.totalRiverMiles ?? 0), highestOrderRiver = $derived(model?.highestOrderRiver ?? null);
   const activeVolcanoes = $derived(model?.activeVolcanoes ?? []), dormantVolcanoes = $derived(model?.dormantVolcanoes ?? []), extinctVolcanoes = $derived(model?.extinctVolcanoes ?? []), regionCounts = $derived(model?.regionCounts ?? []), leadingRegion = $derived(model?.leadingRegion ?? null);
+  const kingdomIndex = $derived(buildKingdomIndex(overlay));
+  const detailKingdom = $derived(kingdomById(kingdomIndex, kingdomId));
   const kingdomColours = $derived(buildKingdomColours(kingdoms, world.seed));
   const kingdomColour = (id: number) => kingdomCssColour(kingdomColours.get(id) ?? 0x7c7c7c);
   const settlementRank = $derived(model?.settlementRank ?? []), peakRank = $derived(model?.peakRank ?? []), riverRank = $derived(model?.riverRank ?? []), lakeRank = $derived(model?.lakeRank ?? []), regionRank = $derived(model?.regionRank ?? []), facts = $derived(model?.facts ?? []);
@@ -167,18 +173,29 @@
       </div>
     </section>
   {:else if mode === 'kingdoms'}
-    <section class="kingdom-page">
-      <div class="kingdom-intro"><h3>Kingdoms of the world</h3><p>Select a realm to highlight its territory on the map.</p></div>
-      <div class="kingdom-list">
-        {#each kingdoms as k (k.id)}
-          <button type="button" class="kingdom-card" onclick={() => onSelectKingdom(k.id)}>
-            <span class="swatch" style:background={kingdomColour(k.id)} style:color={kingdomColour(k.id)}><Icon name="building" size={17} /></span>
-            <span class="kingdom-main"><strong>{k.name}</strong><small>{fmt(k.area_cells)} territory cells · {fmt(k.population)} people</small><small>{fmt(k.cities)} cities · {fmt(k.towns)} towns · {fmt(k.villages)} villages{k.capital ? ' · Capital: ' + k.capital.name : ''}</small></span>
-            <Icon name="chevron-right" size={15} />
-          </button>
-        {:else}<div class="empty">No kingdoms were generated for this world.</div>{/each}
-      </div>
-    </section>
+    {#if detailKingdom}
+      <KingdomDetail
+        kingdom={detailKingdom}
+        allKingdoms={kingdomIndex}
+        colour={kingdomColour(detailKingdom.id)}
+        onBack={onCloseKingdom}
+        onSelectKingdom={onSelectKingdom}
+        onSelectFeature={selectFeature}
+      />
+    {:else}
+      <section class="kingdom-page">
+        <div class="kingdom-intro"><h3>Kingdoms of the world</h3><p>Select a realm to highlight its territory on the map.</p></div>
+        <div class="kingdom-list">
+          {#each kingdoms as k (k.id)}
+            <button type="button" class="kingdom-card" onclick={() => onSelectKingdom(k.id)}>
+              <span class="swatch" style:background={kingdomColour(k.id)} style:color={kingdomColour(k.id)}><Icon name="building" size={17} /></span>
+              <span class="kingdom-main"><strong>{k.name}</strong><small>{fmt(k.area_cells)} territory cells · {fmt(k.population)} people</small><small>{fmt(k.cities)} cities · {fmt(k.towns)} towns · {fmt(k.villages)} villages{k.capital ? ' · Capital: ' + k.capital.name : ''}</small></span>
+              <Icon name="chevron-right" size={15} />
+            </button>
+          {:else}<div class="empty">No kingdoms were generated for this world.</div>{/each}
+        </div>
+      </section>
+    {/if}
   {:else if mode === 'facts'}
     <FactPanel facts={facts} shown={shown} onSelect={selectFeature} onRandom={randomFact} />
     <div class="fact-note">Facts are calculated from generated data only. They describe the generated world, not invented history or lore.</div>
