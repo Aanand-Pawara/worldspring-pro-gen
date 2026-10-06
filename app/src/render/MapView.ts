@@ -35,26 +35,32 @@ export interface HudState {
 }
 
 const STAGES: Record<string, string> = {
-  plates: 'Moving tectonic plates',
-  erosion: 'Eroding mountains',
-  terrain: 'Shaping terrain',
-  volcanoes: 'Raising volcanoes',
-  climate: 'Simulating climate',
-  rivers: 'Tracing rivers and lakes',
-  biomes: 'Growing biomes',
-  names: 'Naming the land',
-  done: 'Finishing',
+  plates: 'Building tectonic plates and continents',
+  erosion: 'Eroding mountains and shaping valleys',
+  terrain: 'Finalizing terrain heights and coastlines',
+  volcanoes: 'Placing volcanoes and volcanic terrain',
+  climate: 'Simulating temperature, moisture and winds',
+  rivers: 'Simulating rivers, lakes and drainage',
+  biomes: 'Classifying and blending biomes',
+  settlements: 'Placing cities, towns and villages',
+  kingdoms: 'Creating kingdoms, capitals and frontiers',
+  roads: 'Connecting settlements with roads',
+  names: 'Naming regions and places',
+  done: 'Finalizing world data',
 };
-/** Rough share of generation time per stage, for the progress bar. */
+/** Estimated share of generation time per stage, used for the live progress bar. */
 const STAGE_WEIGHT: [string, number][] = [
-  ['plates', 0.2],
-  ['erosion', 0.55],
-  ['terrain', 0.03],
-  ['volcanoes', 0.0],
-  ['climate', 0.04],
-  ['rivers', 0.05],
-  ['biomes', 0.04],
-  ['names', 0.09],
+  ['plates', 0.12],
+  ['erosion', 0.42],
+  ['terrain', 0.04],
+  ['volcanoes', 0.02],
+  ['climate', 0.05],
+  ['rivers', 0.08],
+  ['biomes', 0.06],
+  ['settlements', 0.07],
+  ['kingdoms', 0.05],
+  ['roads', 0.06],
+  ['names', 0.03],
   ['done', 0.0],
 ];
 

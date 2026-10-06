@@ -251,10 +251,13 @@ impl T0 {
         let rinp = roads::Inputs { world, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro };
         use settle::Tier as T;
         let mut settlements = settle::place(&sinp, Vec::new(), &[T::Metropolis, T::City], None);
+        progress("settlements", 0.34);
         let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]);
         settlements = settle::place(&sinp, settlements, &[T::Town], Some(&usage));
+        progress("settlements", 0.67);
         let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad, roads::RoadClass::Road]);
         settlements = settle::place(&sinp, settlements, &[T::Village], Some(&usage));
+        progress("settlements", 1.0);
         // Waterside settlements stand on their water, not at the centre of their map cell.
         let water_grid = Grid::from_vec(w, h, hydro.water.clone());
         let biome_seed = world.stream("t0.biome.warp");
@@ -290,7 +293,9 @@ impl T0 {
             best.map(|(_, p, hw)| (p, hw))
         };
         settle::snap_to_water(&mut settlements, cell, &wet, &nearest_river);
+        progress("kingdoms", 0.0);
         let politics = politics::assign(world, w, h, cell, &land, &height, &hydro, &mut settlements, world.params().generate_kingdoms);
+        progress("kingdoms", 1.0);
         let vents_at: Vec<(f64, f64, f64)> = volcanoes.iter().map(|v| (v.cx, v.cy, v.radius_ft)).collect();
         let mut pois = settle::place_pois(&sinp, &settlements, &vents_at);
         // Towns sit beside rivers, not in them (the fine channel meanders through T0 cells).
@@ -306,11 +311,13 @@ impl T0 {
         let mut network = roads::build(&rinp, &settlements);
         // Roads keep out of the belts the rivers meander in, crossing each one once.
         let belts = crate::lod::roads::BeltCache::default();
+        let road_count = network.roads.len().max(1);
         for (i, r) in network.roads.iter_mut().enumerate() {
             let curve = RoadCurve::new(r.class, r.pts.clone(), r.z.clone(), r.wander.clone(), road_seed(world.seed, i));
             if let Some((pts, z, wander)) = crate::lod::roads::unweave(&curve, &rivers, cell, &|x, y| wet(x, y), &belts) {
                 (r.pts, r.z, r.wander) = (pts, z, wander);
             }
+            if i % 8 == 0 || i + 1 == road_count { progress("roads", (i + 1) as f64 / road_count as f64); }
         }
         let (map_w, map_h) = ((w - 1) as f64 * cell, (h - 1) as f64 * cell);
         let road_net = RoadNet::new(
