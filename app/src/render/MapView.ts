@@ -263,17 +263,18 @@ export class MapView {
   }
 
   private kingdomColor(id: number): number {
-    // A deliberately broad cartographic palette. The old hash produced many muddy,
-    // near-identical browns/greys, which made neighbouring kingdoms hard to separate.
+    // Bright, toy-like territory colours inspired by WorldBox. Keep the palette
+    // deliberately high-contrast so neighbouring kingdoms never dissolve into the same
+    // muddy brown/grey cartography soup.
     const palette = [
-      0x3b82f6, 0xef4444, 0x22c55e, 0xf59e0b, 0x8b5cf6, 0x06b6d4,
-      0xec4899, 0x84cc16, 0xf97316, 0x6366f1, 0x14b8a6, 0xeab308,
-      0xa855f7, 0x0ea5e9, 0xdc2626, 0x16a34a, 0xd97706, 0x7c3aed,
-      0x0891b2, 0xdb2777, 0x65a30d, 0xc2410c, 0x4f46e5, 0x0f766e,
+      0xf05a5a, 0x4f8df7, 0x62c370, 0xf2c94c, 0x9b72e8, 0x35b9c8,
+      0xf08a4b, 0xe86aa8, 0x79a94b, 0x6f78d9, 0xe7a84b, 0x4db6ac,
+      0xd85b78, 0x5ca6d6, 0x8d68c7, 0xc5a94b, 0x59a86c, 0xd9785f,
+      0x6b9bd1, 0xb96bb5, 0x8caf54, 0xd6a05d, 0x5d9d9a, 0xb86d6d,
     ];
     let h = Math.imul((this.kingdomSeed ^ Math.imul(id + 1, 0x9e3779b9)) >>> 0, 0x85ebca6b) >>> 0;
     h ^= h >>> 16;
-    return palette[h % palette.length] ?? 0x64748b;
+    return palette[h % palette.length] ?? 0x7c7c7c;
   }
 
   private kingdomCorner(x: number, y: number): [number, number] {
