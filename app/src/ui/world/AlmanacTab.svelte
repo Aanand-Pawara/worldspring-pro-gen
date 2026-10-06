@@ -122,11 +122,7 @@
     <div class="fact-note">Facts are calculated from generated data only. They describe the generated world, not invented history or lore.</div>
   {:else}
     <AlmanacTabs value={ranking} ariaLabel="Ranking categories" items={RANKING_MODES} onChange={(key) => selectRanking(key as typeof ranking)} />
-      <button type="button" data-ranking="settlements" aria-pressed={ranking === 'settlements'} class:on={ranking === 'settlements'} onclick={() => selectRanking('settlements')}>Settlements</button>
-      <button type="button" data-ranking="terrain" aria-pressed={ranking === 'terrain'} class:on={ranking === 'terrain'} onclick={() => selectRanking('terrain')}>Terrain</button>
-      <button type="button" data-ranking="water" aria-pressed={ranking === 'water'} class:on={ranking === 'water'} onclick={() => selectRanking('water')}>Water</button>
-      <button type="button" data-ranking="regions" aria-pressed={ranking === 'regions'} class:on={ranking === 'regions'} onclick={() => selectRanking('regions')}>Biomes</button>
-    </nav>
+
 
     {#if ranking === 'settlements'}
       <section>
