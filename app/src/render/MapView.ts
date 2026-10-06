@@ -320,7 +320,7 @@ export class MapView {
       }
       this.kingdomBuiltOverlay = overlay;
     }
-    g.position.set(this.cam.width / 2 - this.cam.cx * scale, this.cam.height / 2 - this.cam.cy * scale);
+    g.position.set(this.cam.width / 2 - (this.cam.cx / cell) * scale, this.cam.height / 2 - (this.cam.cy / cell) * scale);
     g.scale.set(scale);
   }
 
