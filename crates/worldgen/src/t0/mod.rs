@@ -894,8 +894,7 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
             // receiver cell so both curves share one geometric junction.
             if r.mouth == hydro::Mouth::Confluence {
                 if let Some(parent) = r.into {
-                    if let Some(&last) = r.cells.last() {
-                        let nb = r.terminal_receiver.map(|c| c as usize).unwrap_or(usize::MAX);
+                    if let Some(nb) = r.terminal_receiver.map(|c| c as usize) {
                         if nb < height.len()
                             && chains[parent].cells.iter().any(|&cell_id| cell_id as usize == nb)
                         {
@@ -907,8 +906,7 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
             } else if r.mouth == hydro::Mouth::Ocean || r.mouth == hydro::Mouth::Lake {
                 // Extend the hydro chain to the shoreline so the visible river enters the
                 // receiving water instead of stopping half a cell inland.
-                if let Some(&last) = r.cells.last() {
-                    let nb = r.terminal_receiver.map(|c| c as usize).unwrap_or(usize::MAX);
+                if let Some(nb) = r.terminal_receiver.map(|c| c as usize) {
                     if nb < height.len() && (!land[nb] || hydro.lake_of[nb] != hydro::NO_LAKE) {
                         pts.push([
                             0.5 * (pts.last().unwrap()[0] + (nb % w) as f64 * cell),

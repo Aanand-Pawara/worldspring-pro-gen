@@ -495,8 +495,7 @@ impl Builder<'_> {
             let mut river_q = r.q.clone();
             if r.mouth == Mouth::Confluence {
                 if let Some(parent) = r.into {
-                    if let Some(&last) = r.cells.last() {
-                        let nb = r.terminal_receiver.map(|c| c as usize).unwrap_or(usize::MAX);
+                    if let Some(nb) = r.terminal_receiver.map(|c| c as usize) {
                         if nb < inp.w * inp.h
                             && chains[parent].cells.iter().any(|&cell_id| cell_id as usize == nb)
                         {
@@ -506,8 +505,7 @@ impl Builder<'_> {
                     }
                 }
             } else if r.mouth == Mouth::Ocean || r.mouth == Mouth::Lake {
-                if let Some(&last) = r.cells.last() {
-                    let nb = r.terminal_receiver.map(|c| c as usize).unwrap_or(usize::MAX);
+                if let Some(nb) = r.terminal_receiver.map(|c| c as usize) {
                     if nb < inp.w * inp.h && (!inp.land[nb] || inp.hydro.lake_of[nb] != super::hydro::NO_LAKE) {
                         pts_cells.push([
                             0.5 * (pts_cells.last().unwrap()[0] + (nb % w) as f64),
