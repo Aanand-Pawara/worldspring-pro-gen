@@ -850,7 +850,13 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
         .iter()
         .map(|r| {
             let n = r.cells.len();
-            (0..n).map(|k| (k.min(n - 1 - k) as f32).min(1.0)).collect()
+            (0..n)
+                .map(|k| {
+                    let from_source = crate::core::noise::smoothstep(0.0, 3.0, k as f64);
+                    let from_mouth = crate::core::noise::smoothstep(0.0, 3.0, (n - 1 - k) as f64);
+                    (from_source * from_mouth) as f32
+                })
+                .collect()
         })
         .collect();
     for r in chains {
@@ -858,8 +864,8 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
             let join = *r.cells.last().unwrap();
             if let Some(m) = chains[p].cells.iter().position(|&c| c == join) {
                 for (k, t) in tapers[p].iter_mut().enumerate() {
-                    let d = (k as i64 - m as i64).unsigned_abs() as f32;
-                    *t = t.min(d.min(1.0));
+                    let d = (k as i64 - m as i64).unsigned_abs() as f64;
+                    *t = t.min(crate::core::noise::smoothstep(0.0, 3.0, d) as f32);
                 }
             }
         }
@@ -868,8 +874,8 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
         .iter()
         .enumerate()
         .map(|(ri, r)| {
-            let pts = r.cells.iter().map(|&c| [(c as usize % w) as f64 * cell, (c as usize / w) as f64 * cell]).collect();
-            let z = r
+            let mut pts: Vec<[f64; 2]> = r.cells.iter().map(|&c| [(c as usize % w) as f64 * cell, (c as usize / w) as f64 * cell]).collect();
+            let mut z: Vec<f32> = r
                 .cells
                 .iter()
                 .map(|&c| {
@@ -883,16 +889,46 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
                     }
                 })
                 .collect();
-            // Water cells (the mouth) have no water balance of their own: the river keeps its
-            // discharge (and width) into the lake or sea instead of pinching to nothing.
-            let mut q = r.q.clone();
-            for k in 1..q.len() {
-                let c = r.cells[k] as usize;
-                if !land[c] || hydro.lake_of[c] != hydro::NO_LAKE {
-                    q[k] = q[k].max(q[k - 1]);
+            // The hydro chain ends on its last land cell, but a real river mouth reaches
+            // the shoreline. Add the midpoint between the final land cell and its receiver
+            // (ocean or lake) so the rendered channel actually meets the water instead of
+            // stopping half a cell inland. Confluences already share the exact join cell.
+            if r.mouth == hydro::Mouth::Ocean || r.mouth == hydro::Mouth::Lake {
+                if let Some(&last) = r.cells.last() {
+                    let next = hydro::receivers(w, height.len() / w, &hydro::Hydro::default().water).0;
+                    let _ = next;
+                    let c = last as usize;
+                    let mut receiver = None;
+                    for (nb, _) in crate::t0::flood::neighbors(w, height.len() / w, c) {
+                        if (!land[nb] || hydro.lake_of[nb] != hydro::NO_LAKE) && height[nb] <= height[c] + cell {
+                            receiver = Some(nb);
+                            break;
+                        }
+                    }
+                    if let Some(nb) = receiver {
+                        pts.push([
+                            0.5 * (pts.last().unwrap()[0] + (nb % w) as f64 * cell),
+                            0.5 * (pts.last().unwrap()[1] + (nb / w) as f64 * cell),
+                        ]);
+                        let mouth_z = if !land[nb] {
+                            sea as f32
+                        } else {
+                            hydro.lakes[hydro.lake_of[nb] as usize].level_ft as f32
+                        };
+                        z.push(mouth_z);
+                    }
                 }
             }
-            RiverCurve::new(pts, z, q, tapers[ri].clone(), river_seed(world.seed, ri))
+            let mut q = r.q.clone();
+            let last_q = q.last().copied().unwrap_or(0.0);
+            if pts.len() > q.len() {
+                q.push(last_q.max(q.iter().copied().fold(0.0, f32::max)));
+            }
+            let mut taper = tapers[ri].clone();
+            while taper.len() < pts.len() {
+                taper.push(0.0);
+            }
+            RiverCurve::new(pts, z, q, taper, river_seed(world.seed, ri))
         })
         .collect();
     // Bin extents from the grid (not the world file) so loaded copies index identically.
