@@ -583,6 +583,12 @@
       shell.collapsed = false;
       shell.card = false;
       shell.snap = 'half';
+    } else if (to === shell.section) {
+      // Switching tabs inside an already-open section must reveal the panel.
+      // Otherwise a folded dock can successfully change tabs while remaining invisible.
+      shell.collapsed = false;
+      if (shell.phone) shell.snap = 'half';
+      shell.card = false;
     }
     shell.section = to;
     if (to && t) (shell.tabs as Record<string, string>)[to] = t;
