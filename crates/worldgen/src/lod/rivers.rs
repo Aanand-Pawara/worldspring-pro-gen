@@ -20,7 +20,7 @@ pub fn width_ft(q: f64) -> f64 {
     // exponent is a useful large-scale approximation from USGS hydraulic-geometry work.
     // Keep headwaters narrow enough to read as streams, while allowing major rivers to
     // become dramatically wider after tributaries join.
-    (12.0 * libm::pow((q / 90_000.0).max(0.03), 0.52)).max(5.0)
+    (8.5 * libm::pow((q / 90_000.0).max(0.02), 0.56)).clamp(3.5, 180.0)
 }
 
 fn depth_ft(width: f64) -> f64 {
@@ -410,6 +410,20 @@ pub fn clear_of_rivers(net: &RiverNet, x: f64, y: f64, margin: f64, cell_ft: f64
 /// Per-river seed.
 pub fn river_seed(world_seed: u64, index: usize) -> u64 {
     hash2(world_seed, index as i64, 0x5157)
+}
+
+#[cfg(test)]
+mod width_regression_tests {
+    use super::*;
+    #[test]
+    fn channel_width_has_real_hydraulic_hierarchy() {
+        let headwater = width_ft(90_000.0);
+        let tributary = width_ft(360_000.0);
+        let major = width_ft(3_600_000.0);
+        assert!(tributary > headwater * 1.8);
+        assert!(major > tributary * 2.0);
+        assert!(major < 180.0);
+    }
 }
 
 #[cfg(test)]
