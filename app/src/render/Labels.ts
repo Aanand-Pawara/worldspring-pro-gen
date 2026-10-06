@@ -451,7 +451,7 @@ export class Labels {
     const badge = style.badge!;
     const name = new Text({
       text: f.name,
-      style: new TextStyle({ fontFamily: FONT, fontSize: style.size, fill: style.fill, fontWeight: 'bold', stroke: { color: '#efe6cf', width: 3, join: 'round' } }),
+      style: new TextStyle({ fontFamily: FONT, fontSize: style.size, fill: style.fill ?? INK, fontWeight: 'bold', stroke: { color: '#efe6cf', width: 3, join: 'round' } }),
       anchor: { x: 0, y: 0.5 },
       resolution: 2,
     });
@@ -459,7 +459,7 @@ export class Labels {
     const box = new Container();
     const disc = new Graphics();
     disc.circle(-w / 2 + BADGE_R + 1, 1.2, BADGE_R).fill({ color: 0x000000, alpha: 0.28 });
-    disc.circle(-w / 2 + BADGE_R, 0, BADGE_R).fill(badge.color).stroke({ width: 1.5, color: 0xffffff });
+    disc.circle(-w / 2 + BADGE_R, 0, BADGE_R).fill(badge.color ?? '#57534e').stroke({ width: 1.5, color: 0xffffff });
     const glyph = new Text({ text: badge.glyph, style: new TextStyle({ fontFamily: ['Segoe UI Symbol', ...FONT], fontSize: BADGE_R * 1.25, fill: '#ffffff' }), anchor: 0.5, resolution: 2 });
     glyph.position.set(-w / 2 + BADGE_R, 0.5);
     name.position.set(-w / 2 + BADGE_R * 2 + 3, 0);
