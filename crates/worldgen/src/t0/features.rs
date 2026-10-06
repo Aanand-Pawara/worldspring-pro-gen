@@ -485,8 +485,7 @@ impl Builder<'_> {
         let inp = self.inp;
         let w = inp.w;
         let chains = inp.hydro.rivers.clone();
-        let (receivers, _) = super::flood::receivers(inp.w, inp.h, inp.height);
-        let mut falls: Vec<(f64, f64, f64, usize)> = Vec::new();
+                let mut falls: Vec<(f64, f64, f64, usize)> = Vec::new();
         let mut rapids: Vec<(f64, f64, f64, usize)> = Vec::new();
         for r in &chains {
             if r.cells.len() < 3 {
@@ -497,8 +496,7 @@ impl Builder<'_> {
             if r.mouth == Mouth::Confluence {
                 if let Some(parent) = r.into {
                     if let Some(&last) = r.cells.last() {
-                        let c = last as usize;
-                        let nb = receivers[c] as usize;
+                        let nb = r.terminal_receiver.map(|c| c as usize).unwrap_or(usize::MAX);
                         if nb < inp.w * inp.h
                             && chains[parent].cells.iter().any(|&cell_id| cell_id as usize == nb)
                         {
@@ -509,8 +507,7 @@ impl Builder<'_> {
                 }
             } else if r.mouth == Mouth::Ocean || r.mouth == Mouth::Lake {
                 if let Some(&last) = r.cells.last() {
-                    let c = last as usize;
-                    let nb = receivers[c] as usize;
+                    let nb = r.terminal_receiver.map(|c| c as usize).unwrap_or(usize::MAX);
                     if nb < inp.w * inp.h && (!inp.land[nb] || inp.hydro.lake_of[nb] != super::hydro::NO_LAKE) {
                         pts_cells.push([
                             0.5 * (pts_cells.last().unwrap()[0] + (nb % w) as f64),

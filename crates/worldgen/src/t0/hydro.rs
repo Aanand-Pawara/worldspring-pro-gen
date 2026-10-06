@@ -76,6 +76,8 @@ pub struct River {
     pub length_cells: u32,
     pub length_ft: f64,
     pub basin_id: u64,
+    pub source_cell: u32,
+    pub terminal_receiver: Option<u32>,
 }
 
 pub struct Hydro {
@@ -370,11 +372,21 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
         let source_cell = *cells.first().unwrap() as usize;
         let source_lake = neighbors(w, h, source_cell).filter_map(|(nb, _)| (lake_of[nb] != NO_LAKE && rec[nb] as usize == source_cell).then_some(lake_of[nb])).min();
         let qv = cells.iter().map(|&cc| q[cc as usize] as f32).collect();
-        chains.push(River { cells, q: qv, mouth, into, order: seg_order[root].max(1), drainage_area_cells: accumulation[source_cell], peak_discharge: 0.0, tributary_count: 0, source_lake, mouth_lake, length_cells: 0, length_ft: 0.0, basin_id: basin_id.get(source_cell).copied().unwrap_or(0) });
+        chains.push(River { cells, q: qv, mouth, into, order: seg_order[root].max(1), drainage_area_cells: accumulation[source_cell], peak_discharge: 0.0, tributary_count: 0, source_lake, mouth_lake, length_cells: 0, length_ft: 0.0, basin_id: basin_id.get(source_cell).copied().unwrap_or(0), source_cell: source_cell as u32, terminal_receiver: None });
         for &sid in &path {
             let main_child = path.iter().position(|&p| p == sid).and_then(|i| path.get(i + 1)).copied();
             for &kid in &children[sid] { if Some(kid) != main_child { stack.push((kid, Some(chain_id))); } }
         }
+    }
+    for chain in &mut chains {
+        let end = *chain.cells.last().unwrap() as usize;
+        let next = rec[end] as usize;
+        chain.terminal_receiver = (next < n && next != end && match chain.mouth {
+            Mouth::Ocean => !land[next],
+            Mouth::Lake => lake_of[next] != NO_LAKE,
+            Mouth::Confluence => land[next] && lake_of[next] == NO_LAKE,
+            Mouth::Dry => false,
+        }).then_some(next as u32);
     }
     let tributary_counts: Vec<u16> = (0..chains.len()).map(|id| chains.iter().filter(|r| r.into == Some(id)).count().min(u16::MAX as usize) as u16).collect();
     for (id, chain) in chains.iter_mut().enumerate() {
@@ -511,6 +523,21 @@ mod tests {
         assert_eq!(rivers[0].mouth_lake, Some(0));
         assert!(rivers[0].length_ft > 0.0);
         assert_eq!(rivers[0].basin_id, 0x1_0000_0000);
+    }
+
+    #[test]
+    fn river_network_has_valid_terminal_receivers() {
+        let land = vec![true, true, true, false];
+        let lake = vec![NO_LAKE; 4];
+        let rec = vec![1, 2, 3, 3];
+        let q = vec![100.0, 200.0, 300.0, 0.0];
+        let acc = vec![1, 2, 3, 0];
+        let basin = vec![9u64; 4];
+        let rivers = extract_rivers(4, 1, 1.0, &land, &lake, &rec, &q, &acc, &basin, 90.0, &[]);
+        assert_eq!(rivers.len(), 1);
+        assert_eq!(rivers[0].source_cell, 0);
+        assert_eq!(rivers[0].terminal_receiver, Some(3));
+        assert_eq!(rivers[0].mouth, Mouth::Ocean);
     }
 
     #[test]

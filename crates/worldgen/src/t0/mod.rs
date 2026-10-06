@@ -846,8 +846,7 @@ pub fn lake_at(g: &Grid<f32>, cell_ft: f64, biome_seed: u64, x_ft: f64, y_ft: f6
 fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[bool], hydro: &hydro::Hydro) -> RiverNet {
     let sea = world.params().sea_level_ft;
     let chains = &hydro.rivers;
-    let (receivers, _) = crate::t0::flood::receivers(w, height.len() / w, height);
-    let mut tapers: Vec<Vec<f32>> = chains
+        let mut tapers: Vec<Vec<f32>> = chains
         .iter()
         .map(|r| {
             let n = r.cells.len();
@@ -896,8 +895,7 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
             if r.mouth == hydro::Mouth::Confluence {
                 if let Some(parent) = r.into {
                     if let Some(&last) = r.cells.last() {
-                        let c = last as usize;
-                        let nb = receivers[c] as usize;
+                        let nb = r.terminal_receiver.map(|c| c as usize).unwrap_or(usize::MAX);
                         if nb < height.len()
                             && chains[parent].cells.iter().any(|&cell_id| cell_id as usize == nb)
                         {
@@ -910,8 +908,7 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
                 // Extend the hydro chain to the shoreline so the visible river enters the
                 // receiving water instead of stopping half a cell inland.
                 if let Some(&last) = r.cells.last() {
-                    let c = last as usize;
-                    let nb = receivers[c] as usize;
+                    let nb = r.terminal_receiver.map(|c| c as usize).unwrap_or(usize::MAX);
                     if nb < height.len() && (!land[nb] || hydro.lake_of[nb] != hydro::NO_LAKE) {
                         pts.push([
                             0.5 * (pts.last().unwrap()[0] + (nb % w) as f64 * cell),
