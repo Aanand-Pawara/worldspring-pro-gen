@@ -185,6 +185,8 @@ export class MapView {
   private readonly kingdomLayer = new Graphics();
   private kingdomOverlayOn = false;
   private kingdomSeed = 0;
+  /** Cached political geometry. It is built once per generated overlay, then only transformed with the camera. */
+  private kingdomBuiltOverlay: Overlay | null = null;
   private selectedRiver: Feature | null = null;
   private toolDrawn = false;
   private toolPointer: number | null = null;
@@ -271,62 +273,73 @@ export class MapView {
 
   private drawKingdomOverlay() {
     const g = this.kingdomLayer;
-    g.clear();
     const overlay = this.overlay;
-    if (!this.kingdomOverlayOn || !this.geom || !overlay?.kingdom_cells?.length) return;
-    const w = this.geom.t0_w;
+    if (!this.kingdomOverlayOn || !this.geom || !overlay?.kingdom_cells?.length) {
+      g.visible = false;
+      return;
+    }
+    g.visible = true;
     const cell = this.geom.t0_cell_ft;
-    const runs = new Map<number, { x: number; y: number; n: number }[]>();
-    for (let y = 0; y < this.geom.t0_h; y++) {
-      let x = 0;
-      while (x < w) {
-        const id = overlay.kingdom_cells[y * w + x] ?? 65535;
-        if (id === 65535) { x++; continue; }
-        const x0 = x;
-        while (x + 1 < w && (overlay.kingdom_cells[y * w + x + 1] ?? 65535) === id) x++;
-        const list = runs.get(id) ?? [];
-        list.push({ x: x0, y, n: x - x0 + 1 });
-        runs.set(id, list);
-        x++;
-      }
-    }
+    const scale = cell * this.cam.ppf;
 
-    // Draw the territory as translucent, shared-corner polygons rather than a stack of opaque
-    // rectangles. The result keeps the cheap T0 raster but reads as a continuous political zone.
-    for (const [kingdom, rects] of runs) {
-      const color = this.kingdomColor(kingdom);
-      for (const r of rects) {
-        const points: [number, number][] = [];
-        for (let x = r.x; x <= r.x + r.n; x++) points.push(this.kingdomCorner(x, r.y));
-        for (let x = r.x + r.n; x >= r.x; x--) points.push(this.kingdomCorner(x, r.y + 1));
-        const first = this.cam.worldToScreen(points[0][0] * cell, points[0][1] * cell);
-        g.moveTo(first[0], first[1]);
-        for (let i = 1; i < points.length; i++) {
-          const p = this.cam.worldToScreen(points[i][0] * cell, points[i][1] * cell);
-          g.lineTo(p[0], p[1]);
+    // Political geometry is T0 data, so rebuilding it every frame was the expensive part. Keep
+    // the vertices in compact cell coordinates and let Pixi transform the already-tessellated
+    // graphic. Camera motion now changes only a transform matrix, not thousands of paths.
+    if (this.kingdomBuiltOverlay !== overlay) {
+      g.clear();
+      const w = this.geom.t0_w;
+      const h = this.geom.t0_h;
+      const runs = new Map<number, { x: number; y: number; n: number }[]>();
+      for (let y = 0; y < h; y++) {
+        let x = 0;
+        while (x < w) {
+          const id = overlay.kingdom_cells[y * w + x] ?? 65535;
+          if (id === 65535) { x++; continue; }
+          const x0 = x;
+          while (x + 1 < w && (overlay.kingdom_cells[y * w + x + 1] ?? 65535) === id) x++;
+          const list = runs.get(id) ?? [];
+          list.push({ x: x0, y, n: x - x0 + 1 });
+          runs.set(id, list);
+          x++;
         }
-        g.closePath().fill({ color, alpha: 0.12 });
       }
+
+      // Faded territory fill, WorldBox-style, with shared deterministic corners so the fill and
+      // border agree. The slight perturbation prevents a visibly perfect checkerboard frontier.
+      for (const [kingdom, rects] of runs) {
+        const color = this.kingdomColor(kingdom);
+        for (const r of rects) {
+          const points: [number, number][] = [];
+          for (let x = r.x; x <= r.x + r.n; x++) points.push(this.kingdomCorner(x, r.y));
+          for (let x = r.x + r.n; x >= r.x; x--) points.push(this.kingdomCorner(x, r.y + 1));
+          g.moveTo(points[0][0], points[0][1]);
+          for (let i = 1; i < points.length; i++) g.lineTo(points[i][0], points[i][1]);
+          g.closePath().fill({ color, alpha: 0.12 });
+        }
+      }
+
+      const byKingdom = new Map<number, typeof overlay.kingdom_borders>();
+      for (const s of overlay.kingdom_borders ?? []) {
+        const list = byKingdom.get(s.kingdom) ?? [];
+        list.push(s); byKingdom.set(s.kingdom, list);
+      }
+      for (const [kingdom, segments] of byKingdom) {
+        const color = this.kingdomColor(kingdom);
+        for (const s of segments) {
+          const a = this.kingdomCorner(s.a[0], s.a[1]);
+          const b = this.kingdomCorner(s.b[0], s.b[1]);
+          g.moveTo(a[0], a[1]);
+          g.lineTo(b[0], b[1]);
+        }
+        // World-space width. At normal map zoom this stays cartographic and is dramatically
+        // cheaper than re-tessellating screen-space strokes every frame.
+        g.stroke({ width: 0.035, color, alpha: 0.88, join: 'round', cap: 'round' });
+      }
+      this.kingdomBuiltOverlay = overlay;
     }
 
-    // The border uses the same shared corner geometry as the fill, so the visible line hugs the
-    // actual generated territory instead of floating over it.
-    const byKingdom = new Map<number, typeof overlay.kingdom_borders>();
-    for (const s of overlay.kingdom_borders ?? []) {
-      const list = byKingdom.get(s.kingdom) ?? [];
-      list.push(s); byKingdom.set(s.kingdom, list);
-    }
-    for (const [kingdom, segments] of byKingdom) {
-      const color = this.kingdomColor(kingdom);
-      for (const s of segments) {
-        const a = this.kingdomCorner(s.a[0], s.a[1]);
-        const b = this.kingdomCorner(s.b[0], s.b[1]);
-        const pa = this.cam.worldToScreen(a[0] * cell, a[1] * cell);
-        const pb = this.cam.worldToScreen(b[0] * cell, b[1] * cell);
-        g.moveTo(pa[0], pa[1]); g.lineTo(pb[0], pb[1]);
-      }
-      g.stroke({ width: Math.max(1.5, Math.min(5, this.cam.ppf * cell * 0.035)), color, alpha: 0.88, join: 'round', cap: 'round' });
-    }
+    g.position.set(this.cam.width / 2 - this.cam.cx * scale, this.cam.height / 2 - this.cam.cy * scale);
+    g.scale.set(scale);
   }
 
   setSelectedFeature(feature: Feature | null) {
@@ -760,6 +773,7 @@ export class MapView {
     this.kingdomSeed = world.seed >>> 0;
     this.kingdomLayer.visible = this.kingdomOverlayOn;
     this.kingdomLayer.clear();
+    this.kingdomBuiltOverlay = null;
     this.tiles = new TileLayer(geom, this.gen);
     this.labels = new Labels(overlay.features);
     // The generators have the world's edits already; the labels take them now.
