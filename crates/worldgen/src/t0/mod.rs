@@ -846,6 +846,7 @@ pub fn lake_at(g: &Grid<f32>, cell_ft: f64, biome_seed: u64, x_ft: f64, y_ft: f6
 fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[bool], hydro: &hydro::Hydro) -> RiverNet {
     let sea = world.params().sea_level_ft;
     let chains = &hydro.rivers;
+    let (receivers, _) = crate::t0::flood::receivers(w, height.len() / w, height);
     let mut tapers: Vec<Vec<f32>> = chains
         .iter()
         .map(|r| {
@@ -895,17 +896,9 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
             // stopping half a cell inland. Confluences already share the exact join cell.
             if r.mouth == hydro::Mouth::Ocean || r.mouth == hydro::Mouth::Lake {
                 if let Some(&last) = r.cells.last() {
-                    let next = hydro::receivers(w, height.len() / w, &hydro::Hydro::default().water).0;
-                    let _ = next;
                     let c = last as usize;
-                    let mut receiver = None;
-                    for (nb, _) in crate::t0::flood::neighbors(w, height.len() / w, c) {
-                        if (!land[nb] || hydro.lake_of[nb] != hydro::NO_LAKE) && height[nb] <= height[c] + cell {
-                            receiver = Some(nb);
-                            break;
-                        }
-                    }
-                    if let Some(nb) = receiver {
+                    let nb = receivers[c] as usize;
+                    if nb < height.len() && (!land[nb] || hydro.lake_of[nb] != hydro::NO_LAKE) {
                         pts.push([
                             0.5 * (pts.last().unwrap()[0] + (nb % w) as f64 * cell),
                             0.5 * (pts.last().unwrap()[1] + (nb / w) as f64 * cell),
