@@ -528,6 +528,32 @@ mod tests {
 mod hydrology_regression_tests {
     use super::*;
     #[test]
+    fn river_reaches_are_topologically_connected_at_confluences() {
+        let w = 6;
+        let h = 1;
+        let land = vec![true, true, true, true, true, false];
+        let lake = vec![NO_LAKE; 6];
+        let rec = vec![1, 1, 1, 3, 4, 5];
+        let q = vec![100.0, 220.0, 100.0, 220.0, 220.0, 0.0];
+        let acc = vec![1, 3, 1, 4, 5, 0];
+        let basin = vec![7u64; 6];
+        let rivers = extract_rivers(w, h, 1.0, &land, &lake, &rec, &q, &acc, &basin, 90.0, &[]);
+
+        let main = rivers.iter().find(|r| r.mouth == Mouth::Ocean).expect("main stem must reach the ocean");
+        let tributaries: Vec<&River> = rivers.iter().filter(|r| r.mouth == Mouth::Confluence).collect();
+        assert_eq!(tributaries.len(), 2);
+        assert_eq!(main.order, 2);
+        assert!(main.peak_discharge >= 220.0);
+
+        for tributary in tributaries {
+            assert_eq!(tributary.into, rivers.iter().position(|r| std::ptr::eq(r, main)));
+            let last = *tributary.cells.last().unwrap() as usize;
+            let join = rec[last] as usize;
+            assert_eq!(*main.cells.first().unwrap() as usize, join);
+        }
+    }
+
+    #[test]
     fn accumulation_includes_lake_cells() {
         let land = vec![true, true, true];
         let lake = vec![NO_LAKE, 0, NO_LAKE];
