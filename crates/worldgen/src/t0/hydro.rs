@@ -169,7 +169,7 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
         if lake_of[i] != NO_LAKE {
             q[i] = (q[i] - pet[i]).max(0.0);
         } else if p < 400.0 {
-            q[i] *= 0.985; // transmission loss in dry country
+            q[i] *= 0.997; // gradual transmission loss in dry country; routing remains continuous
         }
         let r = rec[i] as usize;
         if r != i && land[r] {
@@ -241,7 +241,33 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
             if r < n && land[r] && lake_of[r] == NO_LAKE { lake_feed[r] = true; }
         }
     }
-    let is_channel = |i: usize| land[i] && lake_of[i] == NO_LAKE && (q[i] >= threshold || (lake_feed[i] && q[i] >= threshold * 0.20));
+    // A discharge threshold decides where a mapped river is born, not where it is
+    // allowed to die. Once a channel is established, follow the receiver all the way to
+    // the next water body. This prevents dry-country transmission loss from producing
+    // visually orphaned rivers that simply stop on otherwise draining terrain.
+    let is_seed = |i: usize| land[i] && lake_of[i] == NO_LAKE && (q[i] >= threshold || (lake_feed[i] && q[i] >= threshold * 0.20));
+    let mut channel = vec![false; n];
+    let seeds: Vec<usize> = (0..n).filter(|&i| is_seed(i)).collect();
+    for &start in &seeds {
+        channel[start] = true;
+        let mut cur = start;
+        let mut guard = 0usize;
+        while guard < n {
+            guard += 1;
+            let next = rec[cur] as usize;
+            if next >= n || !land[next] || lake_of[next] != NO_LAKE || next == cur {
+                break;
+            }
+            channel[next] = true;
+            // An independently seeded channel already guarantees that its downstream
+            // continuation will be walked. Avoid repeatedly traversing long main stems.
+            if is_seed(next) && next != start {
+                break;
+            }
+            cur = next;
+        }
+    }
+    let is_channel = |i: usize| channel[i];
     let mut upstream = vec![0u8; n];
     for i in 0..n {
         if !is_channel(i) { continue; }
