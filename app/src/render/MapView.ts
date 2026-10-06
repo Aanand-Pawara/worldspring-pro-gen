@@ -304,17 +304,12 @@ export class MapView {
         }
       }
 
-      // Faded territory fill, WorldBox-style, with shared deterministic corners so the fill and
-      // border agree. The slight perturbation prevents a visibly perfect checkerboard frontier.
+      // Faded territory fill, WorldBox-style. Use one rectangle per contiguous row run,
+      // not a polygon with per-corner arrays. Pixi can batch these primitives efficiently.
       for (const [kingdom, rects] of runs) {
         const color = this.kingdomColor(kingdom);
         for (const r of rects) {
-          const points: [number, number][] = [];
-          for (let x = r.x; x <= r.x + r.n; x++) points.push(this.kingdomCorner(x, r.y));
-          for (let x = r.x + r.n; x >= r.x; x--) points.push(this.kingdomCorner(x, r.y + 1));
-          g.moveTo(points[0][0], points[0][1]);
-          for (let i = 1; i < points.length; i++) g.lineTo(points[i][0], points[i][1]);
-          g.closePath().fill({ color, alpha: 0.12 });
+          g.rect(r.x, r.y, r.n, 1).fill({ color, alpha: 0.12 });
         }
       }
 
