@@ -26,7 +26,8 @@ export const DEFAULT_PARAMS: WorldParams = {
   river_density: 1,
   settlement_density: 1,
   poi_density: 1,
-  biome_weights: {},
+  generate_kingdoms: true,
+  biome_weights: {}, {},
 };
 
 /** Biomes whose weight can be tuned (names match `t0::biome::Biome::name`). */
