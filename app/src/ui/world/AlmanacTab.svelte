@@ -77,7 +77,7 @@
   const detailKingdom = $derived(kingdomById(kingdomIndex, kingdomId));
   const kingdomColours = $derived(buildKingdomColours(kingdoms, world.seed));
   const kingdomColour = (id: number) => kingdomCssColour(kingdomColours.get(id) ?? 0x7c7c7c);
-  const settlementRank = $derived(model?.settlementRank ?? []), peakRank = $derived(model?.peakRank ?? []), riverRank = $derived(model?.riverRank ?? []), lakeRank = $derived(model?.lakeRank ?? []), regionRank = $derived(model?.regionRank ?? []), facts = $derived(model?.facts ?? []);
+  const settlementRank = $derived(model?.settlementRank ?? []), deltaRank = $derived(model?.deltaRank ?? []), peakRank = $derived(model?.peakRank ?? []), riverRank = $derived(model?.riverRank ?? []), lakeRank = $derived(model?.lakeRank ?? []), regionRank = $derived(model?.regionRank ?? []), facts = $derived(model?.facts ?? []);
 
   function randomFact() {
     if (facts.length < 2) return;
@@ -320,6 +320,17 @@
         {:else}<div class="empty">Nothing generated for this ranking.</div>{/each}
       </section>
     {:else if ranking === 'water'}
+      <section>
+        <h3>Largest deltas</h3>
+        {#each deltaRank.slice(0, 15) as f, i (f.id)}
+          <button type="button" class="row" onclick={() => selectFeature(f)}>
+            <span class="rank">{i + 1}</span>
+            <span class="icon"><Icon name="waves" size={15} /></span>
+            <span class="name">{f.name}<small>river delta</small></span>
+            <strong>{fmtMiles(f.area_mi2 ?? 0)} mi²</strong>
+          </button>
+        {:else}<div class="empty">No deltas generated.</div>{/each}
+      </section>
       <section>
         <h3>Longest rivers</h3>
         {#each riverRank.slice(0, 15) as f, i (f.id)}

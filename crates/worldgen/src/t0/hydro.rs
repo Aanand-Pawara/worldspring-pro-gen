@@ -20,6 +20,9 @@ pub const NO_LAKE: u32 = u32::MAX;
 
 /// Discharge (mm·cells) at which a stream is mapped as a river, before `river_density`.
 pub const RIVER_Q: f64 = 90_000.0;
+pub const DELTA_Q_FACTOR: f64 = 4.0;
+pub const DELTA_MIN_CELLS: usize = 12;
+pub const DELTA_MAX_GRADE: f64 = 0.04;
 const MIN_LAKE_CELLS: usize = 12;
 const MIN_LAKE_DEPTH_FT: f64 = 60.0;
 
@@ -403,6 +406,19 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
         }).then_some(next as u32);
     }
     let tributary_counts: Vec<u16> = (0..chains.len()).map(|id| chains.iter().filter(|r| r.into == Some(id)).count().min(u16::MAX as usize) as u16).collect();
+    // A mapped river that dead-ends on a land cell is only a true dry river when it is
+    // isolated. If a sea or lake is a few cells away, recover that terminal as a coastal/lake
+    // mouth so the river does not visibly stop on land beside water.
+    for chain in &mut chains {
+        if chain.mouth != Mouth::Dry || chain.cells.len() < 3 { continue; }
+        let last = *chain.cells.last().unwrap() as usize;
+        if let Some((receiver, mouth, lake_id)) = nearby_water_terminal(w, h, land, lake_of, last, 6) {
+            chain.mouth = mouth;
+            chain.mouth_lake = lake_id;
+            chain.terminal_receiver = Some(receiver as u32);
+        }
+    }
+
     for (id, chain) in chains.iter_mut().enumerate() {
         chain.peak_discharge = chain.q.iter().copied().fold(0.0f32, f32::max);
         chain.tributary_count = tributary_counts[id];
@@ -424,6 +440,35 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
     }
     chains
 }
+
+fn nearby_water_terminal(w: usize, h: usize, land: &[bool], lake_of: &[u32], start: usize, max_radius: usize) -> Option<(usize, Mouth, Option<u32>)> {
+    let sx = start % w;
+    let sy = start / w;
+    for radius in 1..=max_radius {
+        let x0 = sx.saturating_sub(radius);
+        let x1 = (sx + radius).min(w.saturating_sub(1));
+        let y0 = sy.saturating_sub(radius);
+        let y1 = (sy + radius).min(h.saturating_sub(1));
+        let mut best: Option<(usize, usize, usize)> = None;
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                let k = y * w + x;
+                if land[k] && lake_of[k] == NO_LAKE { continue; }
+                let d = sx.abs_diff(x) + sy.abs_diff(y);
+                if d > radius { continue; }
+                let key = (d, y * w + x, k);
+                if best.map_or(true, |b| key < b) { best = Some(key); }
+            }
+        }
+        if let Some((_, _, k)) = best {
+            if !land[k] { return Some((k, Mouth::Ocean, None)); }
+            let id = lake_of[k];
+            if id != NO_LAKE { return Some((k, Mouth::Lake, Some(id))); }
+        }
+    }
+    None
+}
+
 fn validate_river_network(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32], rivers: &[River]) -> bool {
     let n = w * h;
     for river in rivers {

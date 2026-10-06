@@ -551,6 +551,35 @@ impl Builder<'_> {
             }
             let _ = q;
 
+            // Large, low-gradient ocean rivers get a named delta feature. The same physical
+            // eligibility used by RiverNet keeps the Almanac synchronized with what is rendered.
+            if r.mouth == Mouth::Ocean
+                && r.order >= 1
+                && r.peak_discharge >= super::hydro::RIVER_Q * super::hydro::DELTA_Q_FACTOR
+                && r.cells.len() >= super::hydro::DELTA_MIN_CELLS
+            {
+                let tail = r.cells.len().min(7);
+                let first = r.cells[r.cells.len() - tail] as usize;
+                let last = *r.cells.last().unwrap() as usize;
+                let grade = (inp.height[first] - inp.height[last]).max(0.0) / (((tail - 1) as f64) * inp.cell_ft).max(1.0);
+                if grade <= super::hydro::DELTA_MAX_GRADE {
+                    let length_ft = (7.0 + 0.9 * crate::core::sqrt((r.peak_discharge as f64 / super::hydro::RIVER_Q).max(1.0))).clamp(7.0, 20.0) * inp.cell_ft;
+                    let spread_ft = length_ft * if r.peak_discharge >= super::hydro::RIVER_Q * 10.0 { 0.72 } else { 0.58 };
+                    let area_mi2 = (0.45 * length_ft * spread_ft) / (5280.0 * 5280.0);
+                    let mouth_cell = r.terminal_receiver.map(|c| c as usize).unwrap_or(last);
+                    let mx = (mouth_cell % w) as f64;
+                    let my = (mouth_cell / w) as f64;
+                    let id = self.push("delta", NameKind::Delta, mx, my, 0.0, spread_ft.max(length_ft), None,
+                        Some(format!("delta of {} | {} distributaries | area {:.1} sq mi | discharge index {:.0}", r.source_cell, if r.peak_discharge >= super::hydro::RIVER_Q * 10.0 { 3 } else { 2 }, area_mi2, r.peak_discharge)));
+                    if let Some(feature) = self.out.features.iter_mut().find(|f| f.id == id) {
+                        feature.area_mi2 = Some(area_mi2);
+                        feature.discharge_index = Some(r.peak_discharge as f64);
+                        feature.length_mi = Some(length_ft / 5280.0);
+                        feature.basin_id = Some(r.basin_id);
+                    }
+                }
+            }
+
             // Waterfalls and rapids: classify sharp downhill channel steps from terrain.
             let mut best: Option<(f64, usize)> = None;
             for k in 0..r.cells.len().saturating_sub(1) {

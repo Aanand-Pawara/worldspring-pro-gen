@@ -963,8 +963,8 @@ fn append_delta_curves(
     for (ri, river) in chains.iter().enumerate() {
         if river.mouth != hydro::Mouth::Ocean
             || river.order < 2
-            || river.peak_discharge < threshold * 6.0
-            || river.cells.len() < 24
+            || river.peak_discharge < threshold * hydro::DELTA_Q_FACTOR
+            || river.cells.len() < hydro::DELTA_MIN_CELLS
         {
             continue;
         }
@@ -975,7 +975,7 @@ fn append_delta_curves(
         let first = river.cells[river.cells.len() - tail] as usize;
         let last = *river.cells.last().unwrap() as usize;
         let grade = (height[first] - height[last]).max(0.0) / (((tail - 1) as f64) * cell).max(1.0);
-        if grade > 0.025 { continue; }
+        if grade > hydro::DELTA_MAX_GRADE { continue; }
 
         let mouth = [
             0.5 * ((last % w) as f64 + (receiver % w) as f64) * cell,
@@ -989,9 +989,9 @@ fn append_delta_curves(
         let px = -dy;
         let py = dx;
 
-        let branch_count = if river.peak_discharge >= threshold * 12.0 { 3 } else { 2 };
+        let branch_count = if river.peak_discharge >= threshold * 10.0 { 3 } else { 2 };
         let spread = if branch_count == 3 { 0.38 } else { 0.30 };
-        let length_cells = (5.0 + 0.65 * libm::sqrt(river.peak_discharge as f64 / threshold as f64)).clamp(5.0, 14.0);
+        let length_cells = (7.0 + 0.9 * libm::sqrt(river.peak_discharge as f64 / threshold as f64)).clamp(7.0, 20.0);
         let length = length_cells * cell;
         let shares: &[f64] = if branch_count == 3 { &[0.42, 0.33, 0.25] } else { &[0.58, 0.42] };
 
@@ -1008,21 +1008,16 @@ fn append_delta_curves(
             let side = if branch_count == 3 { (branch as f64 - 1.0) * 0.16 } else { (branch as f64 - 0.5) * 0.14 };
             let mut pts = Vec::<[f64; 2]>::with_capacity(5);
             let mut q = Vec::<f32>::with_capacity(5);
-            let mut valid = true;
             let share = shares[branch];
             for k in 0..5 {
                 let t = k as f64 / 4.0;
                 let lateral = side * length * t * t;
                 let x = mouth[0] + bx * length * t + px * lateral;
                 let y = mouth[1] + by * length * t + py * lateral;
-                if x < 0.0 || y < 0.0 || x >= (w - 1) as f64 * cell || y >= (h - 1) as f64 * cell {
-                    valid = false;
-                    break;
-                }
+                if x < 0.0 || y < 0.0 || x >= (w - 1) as f64 * cell || y >= (h - 1) as f64 * cell { break; }
                 let gx = (x / cell).round().clamp(0.0, (w - 1) as f64) as usize;
                 let gy = (y / cell).round().clamp(0.0, (h - 1) as f64) as usize;
                 if land[gy * w + gx] {
-                    valid = false;
                     break;
                 }
                 pts.push([x, y]);
