@@ -4,6 +4,7 @@
   import AlmanacTabs from './AlmanacTabs.svelte';
   import FactPanel from './FactPanel.svelte';
   import { buildAlmanacModel, fmt, fmtMiles, population, miles, areaSqMi, drop, type AlmanacModel } from './almanac/model';
+  import { buildKingdomColours, kingdomCssColour } from '../../gen/kingdomColors';
 
   interface Props {
     world: WorldFile;
@@ -68,6 +69,8 @@
   const largestSettlement = $derived(model?.largestSettlement ?? null), highestPeak = $derived(model?.highestPeak ?? null), longestRiver = $derived(model?.longestRiver ?? null), largestRiverBasin = $derived(model?.largestRiverBasin ?? null), largestLake = $derived(model?.largestLake ?? null), largestLandmass = $derived(model?.largestLandmass ?? null), highestWaterfall = $derived(model?.highestWaterfall ?? null), largestRange = $derived(model?.largestRange ?? null);
   const oceanRivers = $derived(model?.oceanRivers ?? []), inlandLakeRivers = $derived(model?.inlandLakeRivers ?? []), dryRivers = $derived(model?.dryRivers ?? []), lakeFedRivers = $derived(model?.lakeFedRivers ?? []), terminalLakes = $derived(model?.terminalLakes ?? []), flowThroughLakes = $derived(model?.flowThroughLakes ?? []), totalRiverMiles = $derived(model?.totalRiverMiles ?? 0), highestOrderRiver = $derived(model?.highestOrderRiver ?? null);
   const activeVolcanoes = $derived(model?.activeVolcanoes ?? []), dormantVolcanoes = $derived(model?.dormantVolcanoes ?? []), extinctVolcanoes = $derived(model?.extinctVolcanoes ?? []), regionCounts = $derived(model?.regionCounts ?? []), leadingRegion = $derived(model?.leadingRegion ?? null);
+  const kingdomColours = $derived(buildKingdomColours(kingdoms, world.seed));
+  const kingdomColour = (id: number) => kingdomCssColour(kingdomColours.get(id) ?? 0x7c7c7c);
   const settlementRank = $derived(model?.settlementRank ?? []), peakRank = $derived(model?.peakRank ?? []), riverRank = $derived(model?.riverRank ?? []), lakeRank = $derived(model?.lakeRank ?? []), regionRank = $derived(model?.regionRank ?? []), facts = $derived(model?.facts ?? []);
 
   function randomFact() {
@@ -169,7 +172,7 @@
       <div class="kingdom-list">
         {#each kingdoms as k (k.id)}
           <button type="button" class="kingdom-card" onclick={() => onSelectKingdom(k.id)}>
-            <span class="swatch" style:background={['#f05a5a','#4f8df7','#62c370','#f2c94c','#9b72e8','#35b9c8','#f08a4b','#e86aa8'][k.id % 8]}></span>
+            <span class="swatch" style:background={kingdomColour(k.id)} style:color={kingdomColour(k.id)}><Icon name="building" size={17} /></span>
             <span class="kingdom-main"><strong>{k.name}</strong><small>{fmt(k.area_cells)} territory cells · {fmt(k.population)} people</small><small>{fmt(k.cities)} cities · {fmt(k.towns)} towns · {fmt(k.villages)} villages{k.capital ? ' · Capital: ' + k.capital.name : ''}</small></span>
             <Icon name="chevron-right" size={15} />
           </button>
@@ -407,9 +410,9 @@
   .kingdom-page { display:flex; flex-direction:column; gap:8px; }
   .kingdom-intro p { margin:0; color:var(--ink-2); font-size:11px; line-height:1.4; }
   .kingdom-list { display:flex; flex-direction:column; gap:4px; }
-  .kingdom-card { display:grid; grid-template-columns:12px 1fr 16px; gap:8px; align-items:center; width:100%; padding:9px 8px; border:1px solid var(--line-faint); border-radius:var(--radius-sm); background:var(--btn-hover); color:var(--ink); text-align:left; cursor:pointer; }
+  .kingdom-card { display:grid; grid-template-columns:24px 1fr 16px; gap:8px; align-items:center; width:100%; padding:9px 8px; border:1px solid var(--line-faint); border-radius:var(--radius-sm); background:var(--btn-hover); color:var(--ink); text-align:left; cursor:pointer; }
   .kingdom-card:hover { border-color:var(--accent); background:var(--btn-on); }
-  .swatch { width:12px; height:34px; border-radius:4px; box-shadow:inset 0 0 0 1px rgba(0,0,0,.12); }
+  .swatch { width:24px; height:34px; border-radius:5px; box-shadow:inset 0 0 0 1px rgba(0,0,0,.12); display:flex; align-items:center; justify-content:center; }
   .kingdom-main { min-width:0; display:flex; flex-direction:column; gap:2px; }
   .kingdom-main strong { font-size:12px; }
   .kingdom-main small { color:var(--ink-3); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
