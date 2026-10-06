@@ -277,6 +277,17 @@ export class MapView {
     this.drawKingdomOverlay();
   }
 
+  /** Return the authoritative generated kingdom occupying a world-space point. */
+  kingdomAt(x: number, y: number): number | null {
+    if (!this.kingdomOverlayOn || !this.geom || !this.overlay?.kingdom_cells?.length) return null;
+    const cell = this.geom.t0_cell_ft;
+    const gx = Math.floor(x / cell);
+    const gy = Math.floor(y / cell);
+    if (gx < 0 || gy < 0 || gx >= this.geom.t0_w || gy >= this.geom.t0_h) return null;
+    const id = this.overlay.kingdom_cells[gy * this.geom.t0_w + gx];
+    return id === undefined || id === 65535 ? null : id;
+  }
+
   private kingdomColor(id: number): number { return this.kingdomColours.get(id) ?? 0x7c7c7c; }
 
   private kingdomCorner(x: number, y: number): [number, number] {
