@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Feature, Overlay, WorldFile } from '../../gen/protocol';
   import Icon from '../Icon.svelte';
+  import AlmanacTabs from './AlmanacTabs.svelte';
   import FactPanel from './FactPanel.svelte';
   import { buildAlmanacModel, fmt, fmtMiles, population, miles, areaSqMi, drop } from './almanac/model';
 
@@ -15,14 +16,17 @@
   let ranking = $state<'settlements' | 'terrain' | 'water' | 'regions'>('settlements');
   let shown = $state(0);
 
-  const {
-    features, settlements, peaks, rivers, lakes, waterfalls, landmasses, ranges, passes, volcanoes, regions,
-    cities, towns, villages, capitals, kingdoms, totalPopulation, cityPopulationShare, capitalPopulationShare,
-    namedKinds, largestSettlement, highestPeak, longestRiver, largestRiverBasin, largestLake, largestLandmass,
-    highestWaterfall, largestRange, oceanRivers, inlandLakeRivers, dryRivers, lakeFedRivers, terminalLakes,
-    flowThroughLakes, totalRiverMiles, highestOrderRiver, activeVolcanoes, dormantVolcanoes, extinctVolcanoes,
-    regionCounts, leadingRegion, settlementRank, peakRank, riverRank, lakeRank, regionRank, facts
-  } = $derived(buildAlmanacModel(world, overlay));
+  const ALMANAC_MODES = [{ key: 'overview', label: 'Overview', icon: 'globe' }, { key: 'facts', label: 'Facts', icon: 'dice' }, { key: 'rankings', label: 'Rankings', icon: 'activity' }];
+  const RANKING_MODES = [{ key: 'settlements', label: 'Settlements' }, { key: 'terrain', label: 'Terrain' }, { key: 'water', label: 'Water' }, { key: 'regions', label: 'Biomes' }];
+
+  // The view consumes one model boundary. Add new Almanac data in model.ts, not here.
+  const model = $derived(buildAlmanacModel(world, overlay));
+  const features = $derived(model.features), settlements = $derived(model.settlements), peaks = $derived(model.peaks), rivers = $derived(model.rivers), lakes = $derived(model.lakes), waterfalls = $derived(model.waterfalls), landmasses = $derived(model.landmasses), ranges = $derived(model.ranges), passes = $derived(model.passes), volcanoes = $derived(model.volcanoes), regions = $derived(model.regions);
+  const cities = $derived(model.cities), towns = $derived(model.towns), villages = $derived(model.villages), capitals = $derived(model.capitals), kingdoms = $derived(model.kingdoms), totalPopulation = $derived(model.totalPopulation), cityPopulationShare = $derived(model.cityPopulationShare), capitalPopulationShare = $derived(model.capitalPopulationShare), namedKinds = $derived(model.namedKinds);
+  const largestSettlement = $derived(model.largestSettlement), highestPeak = $derived(model.highestPeak), longestRiver = $derived(model.longestRiver), largestRiverBasin = $derived(model.largestRiverBasin), largestLake = $derived(model.largestLake), largestLandmass = $derived(model.largestLandmass), highestWaterfall = $derived(model.highestWaterfall), largestRange = $derived(model.largestRange);
+  const oceanRivers = $derived(model.oceanRivers), inlandLakeRivers = $derived(model.inlandLakeRivers), dryRivers = $derived(model.dryRivers), lakeFedRivers = $derived(model.lakeFedRivers), terminalLakes = $derived(model.terminalLakes), flowThroughLakes = $derived(model.flowThroughLakes), totalRiverMiles = $derived(model.totalRiverMiles), highestOrderRiver = $derived(model.highestOrderRiver);
+  const activeVolcanoes = $derived(model.activeVolcanoes), dormantVolcanoes = $derived(model.dormantVolcanoes), extinctVolcanoes = $derived(model.extinctVolcanoes), regionCounts = $derived(model.regionCounts), leadingRegion = $derived(model.leadingRegion);
+  const settlementRank = $derived(model.settlementRank), peakRank = $derived(model.peakRank), riverRank = $derived(model.riverRank), lakeRank = $derived(model.lakeRank), regionRank = $derived(model.regionRank), facts = $derived(model.facts);
 
   function randomFact() {
     if (facts.length < 2) return;
@@ -32,24 +36,8 @@
   }
 
   function selectFeature(f: Feature) { onSelect(f); }
-  function selectMode(next: 'overview' | 'facts' | 'rankings') { mode = next; if (next === 'facts') shown = 0; }
-  function selectRanking(next: 'settlements' | 'terrain' | 'water' | 'regions') { ranking = next; }
-
-  function handleModePointer(e: PointerEvent) {
-    e.stopPropagation();
-    const button = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-mode]');
-    if (!button || button.disabled) return;
-    const next = button.dataset.mode;
-    if (next === 'overview' || next === 'facts' || next === 'rankings') selectMode(next);
-  }
-
-  function handleRankingPointer(e: PointerEvent) {
-    e.stopPropagation();
-    const button = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-ranking]');
-    if (!button || button.disabled) return;
-    const next = button.dataset.ranking;
-    if (next === 'settlements' || next === 'terrain' || next === 'water' || next === 'regions') selectRanking(next);
-  }
+  function selectMode(next: 'overview' | 'facts' | 'rankings') { if (mode === next) return; mode = next; if (next === 'facts') shown = 0; }
+  function selectRanking(next: 'settlements' | 'terrain' | 'water' | 'regions') { if (ranking === next) return; ranking = next; }
 
   $effect(() => { void overlay; shown = 0; });
 </script>
@@ -68,11 +56,7 @@
     </div>
   </header>
 
-  <nav class="subtabs" aria-label="Almanac views" onpointerup={handleModePointer}>
-    <button type="button" data-mode="overview" aria-pressed={mode === 'overview'} class:on={mode === 'overview'} onclick={() => selectMode('overview')}><Icon name="globe" size={14} /> Overview</button>
-    <button type="button" data-mode="facts" aria-pressed={mode === 'facts'} class:on={mode === 'facts'} onclick={() => selectMode('facts')}><Icon name="dice" size={14} /> Facts</button>
-    <button type="button" data-mode="rankings" aria-pressed={mode === 'rankings'} class:on={mode === 'rankings'} onclick={() => selectMode('rankings')}><Icon name="activity" size={14} /> Rankings</button>
-  </nav>
+  <AlmanacTabs value={mode} ariaLabel="Almanac views" items={ALMANAC_MODES} onChange={(key) => selectMode(key as typeof mode)} />
 
   {#if !overlay}
     <div class="empty"><Icon name="help" size={18} /><span>Generate a world first. The almanac reads the generated overlay directly.</span></div>
@@ -137,7 +121,7 @@
     <FactPanel facts={facts} shown={shown} onSelect={selectFeature} onRandom={randomFact} />
     <div class="fact-note">Facts are calculated from generated data only. They describe the generated world, not invented history or lore.</div>
   {:else}
-    <nav class="rank-tabs" aria-label="Ranking categories" onpointerup={handleRankingPointer}>
+    <AlmanacTabs value={ranking} ariaLabel="Ranking categories" items={RANKING_MODES} onChange={(key) => selectRanking(key as typeof ranking)} />
       <button type="button" data-ranking="settlements" aria-pressed={ranking === 'settlements'} class:on={ranking === 'settlements'} onclick={() => selectRanking('settlements')}>Settlements</button>
       <button type="button" data-ranking="terrain" aria-pressed={ranking === 'terrain'} class:on={ranking === 'terrain'} onclick={() => selectRanking('terrain')}>Terrain</button>
       <button type="button" data-ranking="water" aria-pressed={ranking === 'water'} class:on={ranking === 'water'} onclick={() => selectRanking('water')}>Water</button>
