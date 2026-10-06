@@ -890,11 +890,25 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
                     }
                 })
                 .collect();
-            // The hydro chain ends on its last land cell, but a real river mouth reaches
-            // the shoreline. Add the midpoint between the final land cell and its receiver
-            // (ocean or lake) so the rendered channel actually meets the water instead of
-            // stopping half a cell inland. Confluences already share the exact join cell.
-            if r.mouth == hydro::Mouth::Ocean || r.mouth == hydro::Mouth::Lake {
+            // A tributary segment ends one cell before its parent segment's junction because
+            // the raster reach is split at the confluence. Extend the tributary to that exact
+            // receiver cell so both curves share one geometric junction.
+            if r.mouth == hydro::Mouth::Confluence {
+                if let Some(parent) = r.into {
+                    if let Some(&last) = r.cells.last() {
+                        let c = last as usize;
+                        let nb = receivers[c] as usize;
+                        if nb < height.len()
+                            && chains[parent].cells.iter().any(|&cell_id| cell_id as usize == nb)
+                        {
+                            pts.push([(nb % w) as f64 * cell, (nb / w) as f64 * cell]);
+                            z.push(height[nb] as f32);
+                        }
+                    }
+                }
+            } else if r.mouth == hydro::Mouth::Ocean || r.mouth == hydro::Mouth::Lake {
+                // Extend the hydro chain to the shoreline so the visible river enters the
+                // receiving water instead of stopping half a cell inland.
                 if let Some(&last) = r.cells.last() {
                     let c = last as usize;
                     let nb = receivers[c] as usize;
@@ -915,11 +929,9 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
             let mut q = r.q.clone();
             let last_q = q.last().copied().unwrap_or(0.0);
             if pts.len() > q.len() {
+                // The tributary keeps its own discharge at the junction. The parent reach
+                // already contains the accumulated downstream discharge and widens after it.
                 q.push(last_q.max(q.iter().copied().fold(0.0, f32::max)));
-            }
-            let mut taper = tapers[ri].clone();
-            while taper.len() < pts.len() {
-                taper.push(0.0);
             }
             RiverCurve::new(pts, z, q, taper, river_seed(world.seed, ri))
         })
