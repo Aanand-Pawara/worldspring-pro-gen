@@ -376,7 +376,7 @@ export class MapView {
           const right = x + 1 < w ? cells[y * w + x + 1] : 65535;
           const down = y + 1 < h ? cells[(y + 1) * w + x] : 65535;
           const left = x > 0 ? cells[y * w + x - 1] : 65535;
-          const up = y > 0 ? cells[y * w + x - 1] : 65535;
+          const up = y > 0 ? cells[(y - 1) * w + x] : 65535;
           if (right !== kingdom) addEdge(kingdom, x + 1, y, x + 1, y + 1);
           if (down !== kingdom) addEdge(kingdom, x, y + 1, x + 1, y + 1);
           if (left !== kingdom) addEdge(kingdom, x, y, x, y + 1);
