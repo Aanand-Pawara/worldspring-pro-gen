@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { Feature, Overlay, WorldFile } from '../../gen/protocol';
   import Icon from '../Icon.svelte';
+  import FactPanel from './FactPanel.svelte';
+  import { buildAlmanacModel, fmt, fmtMiles, population, miles, areaSqMi, drop } from './almanac/model';
 
   interface Props {
     world: WorldFile;
@@ -13,180 +15,15 @@
   let ranking = $state<'settlements' | 'terrain' | 'water' | 'regions'>('settlements');
   let shown = $state(0);
 
-  const features = $derived(overlay?.features ?? []);
-  const settlements = $derived(features.filter((f) => ['metropolis', 'city', 'town', 'village'].includes(f.kind)));
-  const peaks = $derived(features.filter((f) => f.kind === 'peak' || f.kind === 'volcano'));
-  const rivers = $derived(features.filter((f) => f.kind === 'river'));
-  const lakes = $derived(features.filter((f) => ['lake', 'salt_lake', 'salt_flat'].includes(f.kind)));
-  const waterfalls = $derived(features.filter((f) => f.kind === 'waterfall'));
-  const landmasses = $derived(features.filter((f) => ['continent', 'island'].includes(f.kind)));
-  const ranges = $derived(features.filter((f) => f.kind === 'range'));
-  const passes = $derived(features.filter((f) => f.kind === 'pass'));
-  const volcanoes = $derived(features.filter((f) => f.kind === 'volcano'));
-  const regions = $derived(features.filter((f) => ['forest', 'jungle', 'taiga', 'desert', 'swamp', 'plains', 'tundra', 'glacier', 'plateau', 'valley'].includes(f.kind)));
+  const {
+    features, settlements, peaks, rivers, lakes, waterfalls, landmasses, ranges, passes, volcanoes, regions,
+    cities, towns, villages, capitals, kingdoms, totalPopulation, cityPopulationShare, capitalPopulationShare,
+    namedKinds, largestSettlement, highestPeak, longestRiver, largestRiverBasin, largestLake, largestLandmass,
+    highestWaterfall, largestRange, oceanRivers, inlandLakeRivers, dryRivers, lakeFedRivers, terminalLakes,
+    flowThroughLakes, totalRiverMiles, highestOrderRiver, activeVolcanoes, dormantVolcanoes, extinctVolcanoes,
+    regionCounts, leadingRegion, settlementRank, peakRank, riverRank, lakeRank, regionRank, facts
+  } = $derived(buildAlmanacModel(world, overlay));
 
-  const population = (f: Feature) => Number(/pop\. ([\d,]+)/.exec(f.detail ?? '')?.[1]?.replace(/,/g, '') ?? 0);
-  const drop = (f: Feature) => Number(/drop ~([\d,]+) ft/.exec(f.detail ?? '')?.[1]?.replace(/,/g, '') ?? 0);
-  const miles = (ft: number) => ft / 5280;
-  const areaSqMi = (ft: number) => (ft * ft) / (5280 * 5280);
-  const fmt = (n: number) => n.toLocaleString();
-  const fmtMiles = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  const name = (f: Feature) => f.name;
-  const distanceMi = (a: Feature, b: Feature) => Math.hypot(a.x - b.x, a.y - b.y) / 5280;
-
-  const totalPopulation = $derived(settlements.reduce((n, f) => n + population(f), 0));
-  const cities = $derived(settlements.filter((f) => f.kind === 'city' || f.kind === 'metropolis'));
-  const towns = $derived(settlements.filter((f) => f.kind === 'town'));
-  const villages = $derived(settlements.filter((f) => f.kind === 'village'));
-  const capitals = $derived(settlements.filter((f) => f.political_rank === 'capital' || (f.detail ?? '').includes(', capital')));
-  const kingdoms = $derived.by(() => { const m=new Map<number,{id:number;name:string;capital:Feature|null;population:number;cities:number;towns:number;villages:number}>(); for(const f of settlements){if(f.kingdom_id===undefined)continue;const e=m.get(f.kingdom_id)??{id:f.kingdom_id,name:f.kingdom_name??`Kingdom ${f.kingdom_id+1}`,capital:null,population:0,cities:0,towns:0,villages:0};e.population+=population(f);if(f.political_rank==='capital')e.capital=f;if(f.kind==='metropolis'||f.kind==='city')e.cities++;else if(f.kind==='town')e.towns++;else e.villages++;m.set(f.kingdom_id,e);}return [...m.values()].sort((a,b)=>b.population-a.population||a.name.localeCompare(b.name)); });
-  const cityPopulation = $derived(cities.reduce((n, f) => n + population(f), 0));
-  const capitalPopulation = $derived(capitals.reduce((n, f) => n + population(f), 0));
-  const cityPopulationShare = $derived(totalPopulation ? Math.round((cityPopulation / totalPopulation) * 100) : 0);
-  const capitalPopulationShare = $derived(totalPopulation ? Math.round((capitalPopulation / totalPopulation) * 100) : 0);
-  const namedKinds = $derived(new Set(features.map((f) => f.kind)).size);
-
-  const largestSettlement = $derived(settlements.reduce<Feature | null>((best, f) => !best || population(f) > population(best) ? f : best, null));
-  const highestPeak = $derived(peaks.reduce<Feature | null>((best, f) => !best || (f.elev_ft ?? 0) > (best.elev_ft ?? 0) ? f : best, null));
-  const longestRiver = $derived(rivers.reduce<Feature | null>((best, f) => !best || (f.length_mi ?? miles(f.extent_ft)) > (best.length_mi ?? miles(best.extent_ft)) ? f : best, null));
-  const largestRiverBasin = $derived(rivers.reduce<Feature | null>((best, f) => !best || (f.drainage_area_mi2 ?? 0) > (best.drainage_area_mi2 ?? 0) ? f : best, null));
-  const largestLake = $derived(lakes.reduce<Feature | null>((best, f) => !best || (f.area_mi2 ?? areaSqMi(f.extent_ft)) > (best.area_mi2 ?? areaSqMi(best.extent_ft)) ? f : best, null));
-  const largestLandmass = $derived(landmasses.reduce<Feature | null>((best, f) => !best || f.extent_ft > best.extent_ft ? f : best, null));
-  const highestWaterfall = $derived(waterfalls.reduce<Feature | null>((best, f) => !best || drop(f) > drop(best) ? f : best, null));
-  const largestRange = $derived(ranges.reduce<Feature | null>((best, f) => !best || f.extent_ft > best.extent_ft ? f : best, null));
-  const oceanRivers = $derived(rivers.filter((f) => f.river_mouth === 'ocean'));
-  const inlandLakeRivers = $derived(rivers.filter((f) => f.river_mouth === 'lake'));
-  const dryRivers = $derived(rivers.filter((f) => f.river_mouth === 'dry'));
-  const lakeFedRivers = $derived(rivers.filter((f) => f.source_lake_id !== undefined));
-  const terminalLakes = $derived(lakes.filter((f) => f.has_outlet === false));
-  const flowThroughLakes = $derived(lakes.filter((f) => f.has_outlet === true));
-  const totalRiverMiles = $derived(rivers.reduce((n, f) => n + (f.length_mi ?? miles(f.extent_ft)), 0));
-  const highestOrderRiver = $derived(rivers.reduce<Feature | null>((best, f) => !best || (f.stream_order ?? 0) > (best.stream_order ?? 0) ? f : best, null));
-
-  const activeVolcanoes = $derived(volcanoes.filter((f) => (f.detail ?? '').startsWith('active ')));
-  const dormantVolcanoes = $derived(volcanoes.filter((f) => (f.detail ?? '').startsWith('dormant ')));
-  const extinctVolcanoes = $derived(volcanoes.filter((f) => (f.detail ?? '').startsWith('extinct ')));
-
-  const regionCounts = $derived.by(() => {
-    const counts = new Map<string, number>();
-    for (const f of regions) counts.set(f.kind, (counts.get(f.kind) ?? 0) + 1);
-    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  });
-  const leadingRegion = $derived(regionCounts[0] ?? null);
-
-  // Relational facts use generated feature anchors. They describe proximity between named
-  // generated objects rather than inventing roads, history, ownership or other unsupported lore.
-  const settlementsNearLongestRiver = $derived(longestRiver ? settlements.filter((s) => distanceMi(s, longestRiver) <= 50) : []);
-  const settlementsNearHighestPeak = $derived(highestPeak ? settlements.filter((s) => distanceMi(s, highestPeak) <= 50) : []);
-  const featuresNearLargestCity = $derived(largestSettlement ? features.filter((f) => f.id !== largestSettlement.id && distanceMi(f, largestSettlement) <= 25) : []);
-  const nearbyPeak = $derived.by(() => {
-    if (!largestSettlement || !peaks.length) return null;
-    return peaks.map((p) => ({ f: p, d: distanceMi(p, largestSettlement) })).sort((a, b) => a.d - b.d)[0] ?? null;
-  });
-
-  type Fact = { text: string; tag: string; feature?: Feature };
-  const facts = $derived.by(() => {
-    if (!overlay) return [];
-    const out: Fact[] = [
-      { text: `The generated world contains ${fmt(features.length)} named features across ${fmt(namedKinds)} feature types.`, tag: 'WORLD' },
-      { text: `The map covers ${fmt(world.params.width_mi ?? 0)} × ${fmt(world.params.height_mi ?? 0)} miles.`, tag: 'WORLD' },
-      { text: `Its named settlements account for an estimated ${fmt(totalPopulation)} people across ${fmt(settlements.length)} settlements.`, tag: 'PEOPLE' },
-      { text: `${fmt(cities.length)} cities or metropolises, ${fmt(towns.length)} towns and ${fmt(villages.length)} villages make up the settlement network.`, tag: 'PEOPLE' },
-      { text: `${fmt(capitals.length)} generated settlement${capitals.length === 1 ? '' : 's'} ${capitals.length === 1 ? 'is' : 'are'} marked as capital${capitals.length === 1 ? '' : 's'}.`, tag: 'CIVILIZATION' },
-      { text: `Cities and metropolises contain about ${fmt(cityPopulationShare)}% of the generated population.`, tag: 'CIVILIZATION' },
-      { text: capitals.length ? `Capital settlements contain about ${fmt(capitalPopulationShare)}% of the generated population.` : 'No generated settlement is marked as a capital.', tag: 'CIVILIZATION' },
-      { text: `${fmt(volcanoes.length)} named volcanoes are present: ${fmt(activeVolcanoes.length)} active, ${fmt(dormantVolcanoes.length)} dormant and ${fmt(extinctVolcanoes.length)} extinct.`, tag: 'GEOLOGY' },
-      { text: `${fmt(regions.length)} named biome regions were generated; ${leadingRegion ? `${leadingRegion[1]} are ${leadingRegion[0].replace('_', ' ')} regions, the most represented named region type.` : 'no large named biome region was extracted.'}`, tag: 'CLIMATE' },
-    ];
-    if (largestSettlement) out.push({ text: `${name(largestSettlement)} is the largest settlement, with an estimated population of ${fmt(population(largestSettlement))}.`, tag: 'PEOPLE', feature: largestSettlement });
-    if (highestPeak) out.push({ text: `${name(highestPeak)} is the highest named summit at ${fmt(Math.round(highestPeak.elev_ft ?? 0))} ft above sea level.`, tag: 'TERRAIN', feature: highestPeak });
-    if (longestRiver) out.push({ text: `${name(longestRiver)} is the longest named river at about ${fmtMiles(longestRiver.length_mi ?? miles(longestRiver.extent_ft))} miles.`, tag: 'WATER', feature: longestRiver });
-    if (largestRiverBasin) out.push({ text: `${name(largestRiverBasin)} drains the largest modeled catchment, about ${fmtMiles(largestRiverBasin.drainage_area_mi2 ?? 0)} square miles, at stream order ${largestRiverBasin.stream_order ?? 1}.`, tag: 'HYDROLOGY', feature: largestRiverBasin });
-    if (largestLake) out.push({ text: `${name(largestLake)} is the largest generated lake-type feature by stored extent, about ${fmtMiles(largestLake.area_mi2 ?? areaSqMi(largestLake.extent_ft))} square miles.`, tag: 'WATER', feature: largestLake });
-    if (largestLandmass) out.push({ text: `${name(largestLandmass)} is the largest generated landmass by stored extent, about ${fmtMiles(areaSqMi(largestLandmass.extent_ft))} square miles.`, tag: 'GEOGRAPHY', feature: largestLandmass });
-    if (highestWaterfall) out.push({ text: `${name(highestWaterfall)} has the greatest named waterfall drop at about ${fmt(drop(highestWaterfall))} ft.`, tag: 'WATER', feature: highestWaterfall });
-    if (largestRange) out.push({ text: `${name(largestRange)} is the longest generated mountain-range feature by its stored extent.`, tag: 'TERRAIN', feature: largestRange });
-    if (longestRiver && settlementsNearLongestRiver.length) out.push({ text: `${fmt(settlementsNearLongestRiver.length)} settlements have generated label anchors within 50 miles of ${name(longestRiver)}.`, tag: 'RELATION', feature: longestRiver });
-    if (highestPeak && settlementsNearHighestPeak.length) out.push({ text: `${fmt(settlementsNearHighestPeak.length)} settlements have generated label anchors within 50 miles of ${name(highestPeak)}.`, tag: 'RELATION', feature: highestPeak });
-    if (largestSettlement && nearbyPeak) out.push({ text: `${name(largestSettlement)} is about ${fmtMiles(nearbyPeak.d)} miles from the named peak ${name(nearbyPeak.f)}.`, tag: 'RELATION', feature: largestSettlement });
-    if (largestSettlement && featuresNearLargestCity.length) out.push({ text: `${name(largestSettlement)} has ${fmt(featuresNearLargestCity.length)} other generated feature anchors within 25 miles.`, tag: 'RELATION', feature: largestSettlement });
-    // Expand the Almanac from highlights into a generated reference. Every statement below
-    // is derived from current world data, so the Almanac never invents lore.
-    for (const [kind, count] of regionCounts) {
-      out.push({ text: `${fmt(count)} named ${kind.replace('_', ' ')} regions were identified in the generated terrain.`, tag: 'CLIMATE' });
-    }
-    const featureCounts = new Map<string, number>();
-    for (const f of features) featureCounts.set(f.kind, (featureCounts.get(f.kind) ?? 0) + 1);
-    for (const [kind, count] of [...featureCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
-      out.push({ text: `${fmt(count)} generated features use the ${kind.replace('_', ' ')} category.`, tag: 'WORLD' });
-    }
-    for (const k of kingdoms) {
-      const share = totalPopulation ? Math.round((k.population / totalPopulation) * 100) : 0;
-      out.push({ text: `${k.name} controls about ${fmt(k.area_cells)} terrain cells and contains an estimated ${fmt(k.population)} people.`, tag: 'CIVILIZATION' });
-      out.push({ text: `${k.name} accounts for about ${fmt(share)}% of the generated settlement population.`, tag: 'CIVILIZATION' });
-      out.push({ text: `${k.name} has ${fmt(k.cities)} cities, ${fmt(k.towns)} towns and ${fmt(k.villages)} villages in the generated settlement network.`, tag: 'CIVILIZATION' });
-      if (k.capital?.name) out.push({ text: `${k.name} is administered from ${k.capital.name}, its generated capital settlement.`, tag: 'CIVILIZATION', feature: k.capital });
-    }
-    for (const f of settlementRank.slice(0, 10)) {
-      out.push({ text: `${name(f)} ranks among the ten largest generated settlements with an estimated population of ${fmt(population(f))}.`, tag: 'PEOPLE', feature: f });
-    }
-    for (const f of peakRank.slice(0, 10)) {
-      out.push({ text: `${name(f)} is one of the ten highest named summits in the generated world at ${fmt(Math.round(f.elev_ft ?? 0))} ft.`, tag: 'TERRAIN', feature: f });
-    }
-    for (const f of riverRank.slice(0, 10)) {
-      out.push({ text: `${name(f)} is one of the ten longest named rivers, measuring about ${fmtMiles(f.length_mi ?? miles(f.extent_ft))} miles.`, tag: 'WATER', feature: f });
-      if (f.stream_order) out.push({ text: `${name(f)} reaches stream order ${fmt(f.stream_order)}, describing its modeled position in the drainage hierarchy.`, tag: 'HYDROLOGY', feature: f });
-      if (f.drainage_area_mi2) out.push({ text: `${name(f)} drains about ${fmtMiles(f.drainage_area_mi2)} square miles in the generated hydrological model.`, tag: 'HYDROLOGY', feature: f });
-    }
-    for (const f of lakeRank.slice(0, 10)) {
-      out.push({ text: `${name(f)} is among the ten largest named lake-type features, covering about ${fmtMiles(f.area_mi2 ?? areaSqMi(f.extent_ft))} square miles.`, tag: 'WATER', feature: f });
-      if (f.has_outlet !== undefined) out.push({ text: `${name(f)} is modeled as a ${f.has_outlet ? 'flow-through lake with an outlet' : 'terminal lake without an outlet'}.`, tag: 'HYDROLOGY', feature: f });
-    }
-    for (const f of waterfalls.slice(0, 10)) {
-      out.push({ text: `${name(f)} is a generated waterfall feature with an estimated drop of ${fmt(drop(f))} ft.`, tag: 'WATER', feature: f });
-    }
-    for (const f of ranges.slice(0, 10)) {
-      out.push({ text: `${name(f)} is a generated mountain-range feature spanning about ${fmtMiles(f.length_mi ?? miles(f.extent_ft))} miles of stored extent.`, tag: 'TERRAIN', feature: f });
-    }
-    const coastalSettlements = settlements.filter((f) => f.coastal);
-    const riverSettlements = settlements.filter((f) => f.river);
-    const ports = settlements.filter((f) => f.kind === 'port');
-    const fortresses = settlements.filter((f) => f.kind === 'fortress');
-    const markets = settlements.filter((f) => f.kind === 'market');
-    const mining = settlements.filter((f) => f.kind === 'mining');
-    const farming = settlements.filter((f) => f.kind === 'farming');
-    const fishing = settlements.filter((f) => f.kind === 'fishing');
-    const lumber = settlements.filter((f) => f.kind === 'lumber');
-    const herding = settlements.filter((f) => f.kind === 'herding');
-    const oasis = settlements.filter((f) => f.kind === 'oasis');
-    out.push({ text: `${fmt(coastalSettlements.length)} settlements are flagged as coastal in the generated geography.`, tag: 'GEOGRAPHY' });
-    out.push({ text: `${fmt(riverSettlements.length)} settlements are associated with generated river access.`, tag: 'GEOGRAPHY' });
-    out.push({ text: `${fmt(ports.length)} settlements were classified as ports by the settlement generator.`, tag: 'CIVILIZATION' });
-    out.push({ text: `${fmt(fortresses.length)} settlements were classified as fortresses by the settlement generator.`, tag: 'CIVILIZATION' });
-    out.push({ text: `${fmt(markets.length)} settlements were classified as markets by the settlement generator.`, tag: 'CIVILIZATION' });
-    out.push({ text: `${fmt(mining.length)} settlements were classified as mining centers by the settlement generator.`, tag: 'CIVILIZATION' });
-    out.push({ text: `${fmt(farming.length)} settlements were classified as farming centers by the settlement generator.`, tag: 'CIVILIZATION' });
-    out.push({ text: `${fmt(fishing.length)} settlements were classified as fishing centers by the settlement generator.`, tag: 'CIVILIZATION' });
-    out.push({ text: `${fmt(lumber.length)} settlements were classified as lumber centers by the settlement generator.`, tag: 'CIVILIZATION' });
-    out.push({ text: `${fmt(herding.length)} settlements were classified as herding centers by the settlement generator.`, tag: 'CIVILIZATION' });
-    out.push({ text: `${fmt(oasis.length)} settlements were classified as oases by the settlement generator.`, tag: 'CIVILIZATION' });
-    if (settlements.length) out.push({ text: `The generated settlement network averages about ${fmt(Math.round(totalPopulation / settlements.length))} people per named settlement.`, tag: 'PEOPLE' });
-    if (cities.length) out.push({ text: `There are ${fmt(cities.length)} city-tier settlements, representing ${fmt(cityPopulationShare)}% of the generated settlement population.`, tag: 'PEOPLE' });
-    if (capitals.length) out.push({ text: `The ${fmt(capitals.length)} generated capitals together account for about ${fmt(capitalPopulationShare)}% of settlement population.`, tag: 'CIVILIZATION' });
-    if (rivers.length) out.push({ text: `The named river network contains about ${fmtMiles(totalRiverMiles)} total river miles across ${fmt(rivers.length)} named river features.`, tag: 'HYDROLOGY' });
-    if (oceanRivers.length) out.push({ text: `${fmt(oceanRivers.length)} named rivers are modeled as reaching the ocean.`, tag: 'HYDROLOGY' });
-    if (inlandLakeRivers.length) out.push({ text: `${fmt(inlandLakeRivers.length)} named rivers terminate in generated lakes.`, tag: 'HYDROLOGY' });
-    if (lakeFedRivers.length) out.push({ text: `${fmt(lakeFedRivers.length)} named rivers begin from generated lakes, creating lake-fed drainage routes.`, tag: 'HYDROLOGY' });
-    if (terminalLakes.length) out.push({ text: `${fmt(terminalLakes.length)} named lakes are modeled as terminal basins.`, tag: 'HYDROLOGY' });
-    if (flowThroughLakes.length) out.push({ text: `${fmt(flowThroughLakes.length)} named lakes are modeled with an outlet and through-flow.`, tag: 'HYDROLOGY' });
-    if (volcanoes.length) out.push({ text: `The generated world contains ${fmt(volcanoes.length)} named volcanic features, including ${fmt(activeVolcanoes.length)} active systems.`, tag: 'GEOLOGY' });
-    if (ranges.length) out.push({ text: `${fmt(ranges.length)} named mountain-range features were extracted from the generated terrain.`, tag: 'TERRAIN' });
-    if (passes.length) out.push({ text: `${fmt(passes.length)} named mountain passes were identified as terrain corridors.`, tag: 'TERRAIN' });
-    if (regions.length) out.push({ text: `${fmt(regions.length)} named ecological and geographic regions were extracted from the generated terrain.`, tag: 'CLIMATE' });
-    return out;
-  });
-
-  const current = $derived(facts.length ? facts[shown % facts.length] : null);
   function randomFact() {
     if (facts.length < 2) return;
     let next = Math.floor(Math.random() * facts.length);
@@ -194,29 +31,27 @@
     shown = next;
   }
 
-  function selectFeature(f: Feature) {
-    onSelect(f);
+  function selectFeature(f: Feature) { onSelect(f); }
+  function selectMode(next: 'overview' | 'facts' | 'rankings') { mode = next; if (next === 'facts') shown = 0; }
+  function selectRanking(next: 'settlements' | 'terrain' | 'water' | 'regions') { ranking = next; }
+
+  function handleModePointer(e: PointerEvent) {
+    e.stopPropagation();
+    const button = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-mode]');
+    if (!button || button.disabled) return;
+    const next = button.dataset.mode;
+    if (next === 'overview' || next === 'facts' || next === 'rankings') selectMode(next);
   }
 
-  function selectMode(next: 'overview' | 'facts' | 'rankings') {
-    mode = next;
+  function handleRankingPointer(e: PointerEvent) {
+    e.stopPropagation();
+    const button = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-ranking]');
+    if (!button || button.disabled) return;
+    const next = button.dataset.ranking;
+    if (next === 'settlements' || next === 'terrain' || next === 'water' || next === 'regions') selectRanking(next);
   }
 
-  function selectRanking(next: 'settlements' | 'terrain' | 'water' | 'regions') {
-    ranking = next;
-  }
-
-
-  const settlementRank = $derived([...settlements].sort((a, b) => population(b) - population(a) || a.name.localeCompare(b.name)));
-  const peakRank = $derived([...peaks].sort((a, b) => (b.elev_ft ?? 0) - (a.elev_ft ?? 0)));
-  const riverRank = $derived([...rivers].sort((a, b) => (b.length_mi ?? miles(b.extent_ft)) - (a.length_mi ?? miles(a.extent_ft))));
-  const lakeRank = $derived([...lakes].sort((a, b) => b.extent_ft - a.extent_ft));
-  const regionRank = $derived([...regionCounts]);
-
-  $effect(() => {
-    void overlay;
-    shown = 0;
-  });
+  $effect(() => { void overlay; shown = 0; });
 </script>
 
 <div class="almanac">
@@ -228,12 +63,12 @@
         <p>A readable reference for what this generated world actually contains.</p>
       </div>
       {#if mode === 'facts'}
-        <button class="ws-btn primary" onclick={randomFact} disabled={facts.length < 2}><Icon name="dice" size={15} /> Random</button>
+        <button class="ws-btn primary" type="button" onclick={(e) => { e.stopPropagation(); randomFact(); }} disabled={facts.length < 2}><Icon name="dice" size={15} /> Random</button>
       {/if}
     </div>
   </header>
 
-  <nav class="subtabs" aria-label="Almanac views">
+  <nav class="subtabs" aria-label="Almanac views" onpointerup={handleModePointer}>
     <button type="button" data-mode="overview" aria-pressed={mode === 'overview'} class:on={mode === 'overview'} onclick={() => selectMode('overview')}><Icon name="globe" size={14} /> Overview</button>
     <button type="button" data-mode="facts" aria-pressed={mode === 'facts'} class:on={mode === 'facts'} onclick={() => selectMode('facts')}><Icon name="dice" size={14} /> Facts</button>
     <button type="button" data-mode="rankings" aria-pressed={mode === 'rankings'} class:on={mode === 'rankings'} onclick={() => selectMode('rankings')}><Icon name="activity" size={14} /> Rankings</button>
@@ -299,19 +134,10 @@
       </div>
     </section>
   {:else if mode === 'facts'}
-    {#if current}
-      <article class="fact-card">
-        <div class="tag">{current.tag}</div>
-        <div class="fact">{current.text}</div>
-        {#if current.feature}<button class="show" onclick={() => selectFeature(current.feature!)}><Icon name="pin" size={14} /> Show on map</button>{/if}
-      </article>
-      <div class="counter">Fact {((shown % facts.length) + 1).toLocaleString()} of {facts.length.toLocaleString()}</div>
-    {:else}
-      <div class="empty">No generated facts are available yet.</div>
-    {/if}
-    <div class="fact-note">Facts are calculated from generated data. Proximity facts use named feature anchors, so they never pretend we have a road network or historical record when we don't.</div>
+    <FactPanel facts={facts} shown={shown} onSelect={selectFeature} onRandom={randomFact} />
+    <div class="fact-note">Facts are calculated from generated data only. They describe the generated world, not invented history or lore.</div>
   {:else}
-    <nav class="rank-tabs" aria-label="Ranking categories">
+    <nav class="rank-tabs" aria-label="Ranking categories" onpointerup={handleRankingPointer}>
       <button type="button" data-ranking="settlements" aria-pressed={ranking === 'settlements'} class:on={ranking === 'settlements'} onclick={() => selectRanking('settlements')}>Settlements</button>
       <button type="button" data-ranking="terrain" aria-pressed={ranking === 'terrain'} class:on={ranking === 'terrain'} onclick={() => selectRanking('terrain')}>Terrain</button>
       <button type="button" data-ranking="water" aria-pressed={ranking === 'water'} class:on={ranking === 'water'} onclick={() => selectRanking('water')}>Water</button>
