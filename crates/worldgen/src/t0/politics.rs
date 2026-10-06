@@ -26,13 +26,38 @@ impl Ord for Frontier {
 }
 impl PartialOrd for Frontier { fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) } }
 
-fn edge_cost(a: usize, b: usize, cell_ft: f64, height: &[f64], hydro: &Hydro) -> f64 {
-    let slope = ((height[a] - height[b]).abs() / cell_ft.max(1.0)).min(3.0);
-    let mut cost = 1.0 + 7.0 * slope;
+fn edge_cost(a: usize, b: usize, w: usize, h: usize, cell_ft: f64, height: &[f64], hydro: &Hydro) -> f64 {
+    // Frontiers are simulated as movement costs, not straight geometric partitions. Flat,
+    // fertile-looking corridors are cheap; steep terrain and major waterways are expensive.
+    let slope = ((height[a] - height[b]).abs() / cell_ft.max(1.0)).min(4.0);
+    let mut cost = 1.0 + 11.0 * (slope * 5.0).min(3.0).powi(2);
+
+    // Rivers are especially attractive as borders because crossing them is costly while moving
+    // along the same river corridor is comparatively cheap.
     let river_a = hydro.discharge.get(a).copied().unwrap_or(0.0) as f64 > hydro::RIVER_Q * 0.20;
     let river_b = hydro.discharge.get(b).copied().unwrap_or(0.0) as f64 > hydro::RIVER_Q * 0.20;
-    if river_a || river_b { cost += 9.0; }
-    if hydro.lake_of.get(a).copied().unwrap_or(hydro::NO_LAKE) != hydro::NO_LAKE || hydro.lake_of.get(b).copied().unwrap_or(hydro::NO_LAKE) != hydro::NO_LAKE { cost += 28.0; }
+    if river_a || river_b {
+        cost += 52.0;
+        if river_a && river_b { cost += 14.0; }
+    }
+
+    // Lakes are stronger barriers than rivers. Their shorelines naturally become political
+    // frontiers without requiring a special "draw a lake border" rule.
+    let lake_a = hydro.lake_of.get(a).copied().unwrap_or(hydro::NO_LAKE) != hydro::NO_LAKE;
+    let lake_b = hydro.lake_of.get(b).copied().unwrap_or(hydro::NO_LAKE) != hydro::NO_LAKE;
+    if lake_a || lake_b { cost += 110.0; }
+
+    // A cell that stands well above its neighbours behaves like a ridge. This makes mountain
+    // chains and escarpments hard to cross while still allowing low saddles/passes to remain
+    // usable, which is much closer to how historical frontiers tend to form.
+    let mut ridge = 0.0;
+    for k in [a, b] {
+        for (nb, _) in neighbors(w, h, k) {
+            ridge = ridge.max((height[k] - height[nb]).max(0.0) / cell_ft.max(1.0));
+        }
+    }
+    let ridge = ridge.min(2.5);
+    cost += 20.0 * ridge.powi(2);
     cost
 }
 
@@ -67,7 +92,9 @@ pub fn assign(world: &World, w: usize, h: usize, cell_ft: f64, land: &[bool], he
     for &cc in &cap_comp { if cc != u32::MAX { has_cap[cc as usize] = true; } }
 
     // Political territory uses a weighted multi-source flood instead of a Euclidean Voronoi.
-    // Steep crossings are expensive; rivers and lakes form strong natural boundary candidates.
+    // Terrain, drainage barriers, and mountain passes shape the frontier, while capitals provide
+    // the human centre of gravity. This is intentionally a deterministic approximation of
+    // historical territorial expansion, not a mathematically straight partition.
     let inf = f64::INFINITY;
     let mut dist = vec![inf; n];
     let mut kingdom_of = vec![u16::MAX; n];
@@ -83,7 +110,7 @@ pub fn assign(world: &World, w: usize, h: usize, cell_ft: f64, land: &[bool], he
         let cc = comp[cur.cell];
         for (nb, _) in neighbors(w, h, cur.cell) {
             if !land[nb] || comp[nb] != cc { continue; }
-            let nd = cur.cost + edge_cost(cur.cell, nb, cell_ft, height, hydro);
+            let nd = cur.cost + edge_cost(cur.cell, nb, w, h, cell_ft, height, hydro);
             let better = nd < dist[nb] - 1e-9 || (nd - dist[nb]).abs() <= 1e-9 && cur.kingdom < kingdom_of[nb];
             if better {
                 dist[nb] = nd;
