@@ -959,7 +959,7 @@ fn append_delta_curves(
     cell: f64,
 ) {
     let h = height.len() / w;
-    let threshold = hydro::RIVER_Q;
+    let threshold = hydro::RIVER_Q as f64;
     for (ri, river) in chains.iter().enumerate() {
         if river.mouth != hydro::Mouth::Ocean
             || river.order < 2
@@ -991,7 +991,7 @@ fn append_delta_curves(
 
         let branch_count = if river.peak_discharge >= threshold * 12.0 { 3 } else { 2 };
         let spread = if branch_count == 3 { 0.38 } else { 0.30 };
-        let length_cells = (5.0 + 0.65 * libm::sqrt(river.peak_discharge / threshold)).clamp(5.0, 14.0);
+        let length_cells = (5.0 + 0.65 * libm::sqrt(river.peak_discharge as f64 / threshold)).clamp(5.0, 14.0);
         let length = length_cells * cell;
         let shares: &[f64] = if branch_count == 3 { &[0.42, 0.33, 0.25] } else { &[0.58, 0.42] };
 
@@ -1026,7 +1026,7 @@ fn append_delta_curves(
                     break;
                 }
                 pts.push([x, y]);
-                q.push((river.peak_discharge * share * (1.0 - 0.55 * t)) as f32);
+                q.push((river.peak_discharge as f64 * share * (1.0 - 0.55 * t)) as f32);
             }
             if !valid || pts.len() < 3 { continue; }
             let taper = vec![0.0, 0.15, 0.25, 0.18, 0.0];
