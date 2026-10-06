@@ -574,7 +574,7 @@ impl Builder<'_> {
                     let mouth_cell = r.terminal_receiver.map(|c| c as usize).unwrap_or(last);
                     let mx = (mouth_cell % w) as f64;
                     let my = (mouth_cell / w) as f64;
-                    let river_name = self.out.features.iter().find(|f| f.id == id).map(|f| f.name.clone()).unwrap_or_else(|| format!("River {}", r.source_cell));
+                    let river_name = format!("River {}", r.source_cell);
                     let delta_id = self.push("delta", NameKind::Delta, mx, my, 0.0, spread_ft.max(length_ft), None,
                         Some(format!("delta of {} | {} connected distributaries | area {:.1} sq mi | mouth discharge {:.0}", river_name, distributaries, area_mi2, mouth_q)));
                     if let Some(feature) = self.out.features.iter_mut().find(|f| f.id == delta_id) {

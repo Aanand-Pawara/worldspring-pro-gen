@@ -244,7 +244,6 @@ fn repair_nearby_water_sinks(w: usize, h: usize, land: &[bool], lake_of: &[u32],
         stamp[start] = generation; parent[start] = start;
         let mut target = None;
         while let Some(cur) = queue.pop_front() {
-            let cx = cur % w; let cy = cur / w;
             for (nb, _) in neighbors(w, h, cur) {
                 let nx = nb % w; let ny = nb / w;
                 if sx.abs_diff(nx) + sy.abs_diff(ny) > max_radius { continue; }
