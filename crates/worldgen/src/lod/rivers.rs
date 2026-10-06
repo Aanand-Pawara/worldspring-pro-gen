@@ -166,12 +166,12 @@ impl RiverCurve {
         // Noise coordinates accumulate along the river (like the meander phase), so they
         // advance smoothly even where the width changes.
         let vary = 0.6 + 0.4 * gradient2(self.seed, phase / (3.0 * std::f64::consts::TAU), 0.37);
-        let amp = (0.24 * lambda * sinuosity * vary).min(0.3 * cell_ft);
+        let amp = (0.10 * lambda * sinuosity * vary).min((0.18 * cell_ft).max(2.0 * w));
         let wphase = lerp(self.wphase[k], self.wphase[k1]);
-        let wiggle = 1.2 * w * gradient2(self.seed ^ 0x55, wphase, 0.71);
+        let wiggle = 0.35 * w * gradient2(self.seed ^ 0x55, wphase, 0.71);
         // Cell-scale drift: even small streams never run straight between T0 cells.
         let drift_len = 2.5 * cell_ft;
-        let drift = 0.22 * cell_ft * gradient2(self.seed ^ 0x99, s / drift_len, 0.13);
+        let drift = 0.06 * cell_ft * gradient2(self.seed ^ 0x99, s / drift_len, 0.13);
         Frame { base, nrm, z, w, q, taper, lambda, amp, phase, wiggle, drift_len, drift }
     }
 }
@@ -410,4 +410,48 @@ pub fn clear_of_rivers(net: &RiverNet, x: f64, y: f64, margin: f64, cell_ft: f64
 /// Per-river seed.
 pub fn river_seed(world_seed: u64, index: usize) -> u64 {
     hash2(world_seed, index as i64, 0x5157)
+}
+
+#[cfg(test)]
+mod river_curve_regression_tests {
+    use super::*;
+
+    #[test]
+    fn river_curve_preserves_source_and_mouth_positions() {
+        let curve = RiverCurve::new(
+            vec![[0.0, 0.0], [100.0, 20.0], [210.0, 10.0], [320.0, 0.0]],
+            vec![500.0, 400.0, 300.0, 200.0],
+            vec![90_000.0; 4],
+            vec![0.0, 1.0, 1.0, 0.0],
+            1234,
+        );
+        let a = curve.eval(0, 0.0, 2.5, 100.0).p;
+        let b = curve.eval(2, 1.0, 2.5, 100.0).p;
+        assert!((a[0]).abs() < 1e-6 && (a[1]).abs() < 1e-6);
+        assert!((b[0] - 320.0).abs() < 1e-6 && (b[1]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn river_meander_stays_close_to_its_flow_corridor() {
+        let curve = RiverCurve::new(
+            vec![[0.0, 0.0], [100.0, 20.0], [210.0, 10.0], [320.0, 0.0]],
+            vec![500.0, 400.0, 300.0, 200.0],
+            vec![90_000.0; 4],
+            vec![0.0, 1.0, 1.0, 0.0],
+            5678,
+        );
+        for k in 0..curve.segments() {
+            for j in 0..=8 {
+                let p = curve.eval(k, j as f64 / 8.0, 2.5, 100.0).p;
+                let a = curve.pts[k];
+                let b = curve.pts[k + 1];
+                let dx = b[0] - a[0];
+                let dy = b[1] - a[1];
+                let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy).max(1e-9)).clamp(0.0, 1.0);
+                let q = [a[0] + dx * t, a[1] + dy * t];
+                let d = dist(p, q);
+                assert!(d <= 40.0, "river curve escaped flow corridor by {d} ft");
+            }
+        }
+    }
 }

@@ -1,6 +1,6 @@
 // The map: Pixi application, camera, input (wheel/drag/pinch/keys with inertia), fly-to,
 // and per-frame styling (zoom-adaptive hillshade and contour interval).
-import { Application, Container, Graphics } from 'pixi.js';
+import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
 import { GenClient } from '../gen/client';
 import { type Clear, type Created, type Edits, type Feature, type Placed, type GenStats, type Geom, type Interior, type Overlay, type Rect, type WantTile, type WorldFile } from '../gen/protocol';
 import { BattlemapLayer, type SquareInfo } from './BattlemapLayer';
@@ -183,6 +183,8 @@ export class MapView {
   /** Selected river highlight, deliberately separate from the always-on river renderer. */
   private readonly selectedRiverLayer = new Graphics();
   private readonly kingdomLayer = new Graphics();
+  private readonly kingdomFill = new Sprite(Texture.WHITE);
+  private kingdomFillTexture: Texture | null = null;
   private kingdomOverlayOn = false;
   private kingdomSeed = 0;
   /** Cached political geometry. It is built once per generated overlay, then only transformed with the camera. */
@@ -243,6 +245,7 @@ export class MapView {
   ) {
     this.interiorStyle = { player: role === 'player', doors: null };
     this.ownKeys = opts.keys ?? true;
+    this.kingdomFill.visible = false;
   }
 
   /** Highlight only a selected river. Normal rivers stay in the normal map layer. */
@@ -276,64 +279,72 @@ export class MapView {
     const overlay = this.overlay;
     if (!this.kingdomOverlayOn || !this.geom || (!overlay?.kingdom_cells?.length && !overlay?.kingdom_borders?.length)) {
       g.visible = false;
+      this.kingdomFill.visible = false;
       return;
     }
     g.visible = true;
+    this.kingdomFill.visible = !!overlay.kingdom_cells?.length;
     const cell = this.geom.t0_cell_ft;
     const scale = cell * this.cam.ppf;
 
-    // Political geometry is T0 data, so rebuilding it every frame was the expensive part. Keep
-    // the vertices in compact cell coordinates and let Pixi transform the already-tessellated
-    // graphic. Camera motion now changes only a transform matrix, not thousands of paths.
+    // The fill is baked once into an RGBA texture instead of thousands of Graphics rectangles.
+    // That keeps the WorldBox-style territory tint cheap on integrated GPUs.
     if (this.kingdomBuiltOverlay !== overlay) {
       g.clear();
-      const w = this.geom.t0_w;
-      const h = this.geom.t0_h;
-      const runs = new Map<number, { x: number; y: number; n: number }[]>();
-      if (overlay.kingdom_cells?.length) for (let y = 0; y < h; y++) {
-        let x = 0;
-        while (x < w) {
-          const id = overlay.kingdom_cells[y * w + x] ?? 65535;
-          if (id === 65535) { x++; continue; }
-          const x0 = x;
-          while (x + 1 < w && (overlay.kingdom_cells[y * w + x + 1] ?? 65535) === id) x++;
-          const list = runs.get(id) ?? [];
-          list.push({ x: x0, y, n: x - x0 + 1 });
-          runs.set(id, list);
-          x++;
+      if (this.kingdomFillTexture) {
+        this.kingdomFillTexture.destroy(true);
+        this.kingdomFillTexture = null;
+      }
+      if (overlay.kingdom_cells?.length) {
+        const w = this.geom.t0_w;
+        const h = this.geom.t0_h;
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          const image = ctx.createImageData(w, h);
+          for (let i = 0; i < w * h; i++) {
+            const id = overlay.kingdom_cells[i] ?? 65535;
+            if (id === 65535) continue;
+            const color = this.kingdomColor(id);
+            const o = i * 4;
+            image.data[o] = (color >>> 16) & 255;
+            image.data[o + 1] = (color >>> 8) & 255;
+            image.data[o + 2] = color & 255;
+            image.data[o + 3] = 31;
+          }
+          ctx.putImageData(image, 0, 0);
+          this.kingdomFillTexture = Texture.from(canvas);
+          this.kingdomFill.texture = this.kingdomFillTexture;
         }
       }
 
-      // Faded territory fill, WorldBox-style. Use one rectangle per contiguous row run,
-      // not a polygon with per-corner arrays. Pixi can batch these primitives efficiently.
-      for (const [kingdom, rects] of runs) {
-        const color = this.kingdomColor(kingdom);
-        for (const r of rects) {
-          g.rect(r.x, r.y, r.n, 1).fill({ color, alpha: 0.12 });
-        }
-      }
-
+      // Keep borders as compact vector paths. One stroke per kingdom, not one stroke per edge.
       const byKingdom = new Map<number, typeof overlay.kingdom_borders>();
-      for (const s of overlay.kingdom_borders ?? []) {
-        const list = byKingdom.get(s.kingdom) ?? [];
-        list.push(s); byKingdom.set(s.kingdom, list);
+      for (const segment of overlay.kingdom_borders ?? []) {
+        const list = byKingdom.get(segment.kingdom) ?? [];
+        list.push(segment);
+        byKingdom.set(segment.kingdom, list);
       }
       for (const [kingdom, segments] of byKingdom) {
         const color = this.kingdomColor(kingdom);
-        for (const s of segments) {
-          const a = this.kingdomCorner(s.a[0], s.a[1]);
-          const b = this.kingdomCorner(s.b[0], s.b[1]);
+        for (const segment of segments) {
+          const a = this.kingdomCorner(segment.a[0], segment.a[1]);
+          const b = this.kingdomCorner(segment.b[0], segment.b[1]);
           g.moveTo(a[0], a[1]);
           g.lineTo(b[0], b[1]);
         }
-        // World-space width. At normal map zoom this stays cartographic and is dramatically
-        // cheaper than re-tessellating screen-space strokes every frame.
-        g.stroke({ width: 0.035, color, alpha: 0.88, join: 'round', cap: 'round' });
+        g.stroke({ width: 0.032, color, alpha: 0.9, join: 'round', cap: 'round' });
       }
       this.kingdomBuiltOverlay = overlay;
     }
 
-    g.position.set(this.cam.width / 2 - this.cam.cx * scale, this.cam.height / 2 - this.cam.cy * scale);
+    const px = this.cam.width / 2 - this.cam.cx * scale;
+    const py = this.cam.height / 2 - this.cam.cy * scale;
+    this.kingdomFill.position.set(px, py);
+    this.kingdomFill.scale.set(scale);
+    g.position.set(px, py);
     g.scale.set(scale);
   }
 
@@ -768,6 +779,9 @@ export class MapView {
     this.kingdomSeed = world.seed >>> 0;
     this.kingdomLayer.visible = this.kingdomOverlayOn;
     this.kingdomLayer.clear();
+    if (this.kingdomFillTexture) { this.kingdomFillTexture.destroy(true); this.kingdomFillTexture = null; }
+    this.kingdomFill.texture = Texture.WHITE;
+    this.kingdomFill.visible = false;
     this.kingdomBuiltOverlay = null;
     this.tiles = new TileLayer(geom, this.gen);
     this.labels = new Labels(overlay.features);
@@ -788,6 +802,7 @@ export class MapView {
     this.battle.sprites = this.edits.sprites ?? {};
     this.battle.warmup();
     this.app.stage.addChild(this.tiles.container);
+    this.app.stage.addChild(this.kingdomFill);
     this.app.stage.addChild(this.kingdomLayer);
     this.app.stage.addChild(this.selectedRiverLayer);
     this.app.stage.addChild(this.battle.container);

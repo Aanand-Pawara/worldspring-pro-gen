@@ -510,11 +510,8 @@ impl Builder<'_> {
                 };
                 let detail = Some(format!("{} | mouth {} | order {} | basin {} | length {:.1} mi | drainage area {:.1} sq mi | discharge index {:.0} | {} direct tributaries", source, mouth, r.order, r.basin_id, len / 5280.0, basin_mi2, r.peak_discharge, r.tributary_count));
                 let id = self.push("river", NameKind::River, pts[m][0], pts[m][1], angle, len, None, detail);
-                let path = r.cells.iter().zip(&r.q).map(|(&cell, &q)| {
-                    let k = cell as usize;
-                    let x = (k % w) as f64 * inp.cell_ft;
-                    let y = (k / w) as f64 * inp.cell_ft;
-                    [x, y, crate::lod::rivers::width_ft(q as f64)]
+                let path = pts.iter().zip(&q).map(|(&p, &q)| {
+                    [p[0] * inp.cell_ft, p[1] * inp.cell_ft, crate::lod::rivers::width_ft(q as f64)]
                 }).collect();
                 if let Some(f) = self.out.features.iter_mut().find(|f| f.id == id) {
                     f.river_path = Some(path);
