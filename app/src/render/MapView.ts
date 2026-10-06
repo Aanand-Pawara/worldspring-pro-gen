@@ -309,14 +309,14 @@ export class MapView {
           if (p && p.y + p.rows === r.y) p.rows++;
           else { const n = { x: r.x, y: r.y, n: r.n, rows: 1 }; active.set(key, n); merged.push(n); }
         }
-        for (const r of merged) g.rect(r.x * cell, r.y * cell, r.n * cell, r.rows * cell).fill({ color, alpha: 0.13 });
+        for (const r of merged) g.rect(r.x, r.y, r.n, r.rows).fill({ color, alpha: 0.18 });
       }
       const byKingdom = new Map<number, typeof overlay.kingdom_borders>();
       for (const s of overlay.kingdom_borders ?? []) { const list = byKingdom.get(s.kingdom) ?? []; list.push(s); byKingdom.set(s.kingdom, list); }
       for (const [kingdom, segments] of byKingdom) {
         const color = this.kingdomColor(kingdom);
         for (const s of segments) { const a = this.kingdomCorner(s.a[0], s.a[1]), b = this.kingdomCorner(s.b[0], s.b[1]); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); }
-        g.stroke({ width: Math.max(0.035, 1.4 / scale), color, alpha: 0.92, join: 'round', cap: 'round' });
+        g.stroke({ width: Math.max(0.06, 1.8 / scale), color, alpha: 0.96, join: 'round', cap: 'round' });
       }
       this.kingdomBuiltOverlay = overlay;
     }
