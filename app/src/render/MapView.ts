@@ -1,6 +1,6 @@
 // The map: Pixi application, camera, input (wheel/drag/pinch/keys with inertia), fly-to,
 // and per-frame styling (zoom-adaptive hillshade and contour interval).
-import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
+import { Application, Container, Graphics, Sprite, Text, TextStyle, Texture } from 'pixi.js';
 import { GenClient } from '../gen/client';
 import { type Clear, type Created, type Edits, type Feature, type Placed, type GenStats, type Geom, type Interior, type Overlay, type Rect, type WantTile, type WorldFile } from '../gen/protocol';
 import { BattlemapLayer, type SquareInfo } from './BattlemapLayer';
@@ -183,6 +183,7 @@ export class MapView {
   /** Selected river highlight, deliberately separate from the always-on river renderer. */
   private readonly selectedRiverLayer = new Graphics();
   private readonly kingdomLayer = new Graphics();
+  private readonly kingdomLabels = new Container();
   private readonly kingdomFill = new Sprite(Texture.WHITE);
   private kingdomFillTexture: Texture | null = null;
   private kingdomOverlayOn = false;
@@ -256,10 +257,17 @@ export class MapView {
   }
 
   private kingdomColor(id: number): number {
-    let h = Math.imul((this.kingdomSeed ^ Math.imul(id + 1, 0x45d9f3b)) >>> 0, 0x27d4eb2d) >>> 0;
-    h ^= h >>> 15; h = Math.imul(h, 0x85ebca6b) >>> 0; h ^= h >>> 13;
-    const r = 96 + (h & 0x5f), g = 78 + ((h >>> 8) & 0x6f), b = 82 + ((h >>> 16) & 0x6f);
-    return (r << 16) | (g << 8) | b;
+    // A deliberately broad cartographic palette. The old hash produced many muddy,
+    // near-identical browns/greys, which made neighbouring kingdoms hard to separate.
+    const palette = [
+      0x3b82f6, 0xef4444, 0x22c55e, 0xf59e0b, 0x8b5cf6, 0x06b6d4,
+      0xec4899, 0x84cc16, 0xf97316, 0x6366f1, 0x14b8a6, 0xeab308,
+      0xa855f7, 0x0ea5e9, 0xdc2626, 0x16a34a, 0xd97706, 0x7c3aed,
+      0x0891b2, 0xdb2777, 0x65a30d, 0xc2410c, 0x4f46e5, 0x0f766e,
+    ];
+    let h = Math.imul((this.kingdomSeed ^ Math.imul(id + 1, 0x9e3779b9)) >>> 0, 0x85ebca6b) >>> 0;
+    h ^= h >>> 16;
+    return palette[h % palette.length];
   }
 
   private kingdomCorner(x: number, y: number): [number, number] {
@@ -323,9 +331,77 @@ export class MapView {
          g.stroke({ width: Math.max(0.06, 1.25 / scale), color, alpha: 0.96, join: 'round', cap: 'round' });
        }
       this.kingdomBuiltOverlay = overlay;
+      this.buildKingdomLabels(overlay);
     }
     g.position.set(this.cam.width / 2 - (this.cam.cx / cell) * scale, this.cam.height / 2 - (this.cam.cy / cell) * scale);
     g.scale.set(scale);
+    this.updateKingdomLabels();
+  }
+
+  private buildKingdomLabels(overlay: Overlay) {
+    this.kingdomLabels.removeChildren().forEach((child) => child.destroy());
+    const cells = overlay.kingdom_cells;
+    const w = this.geom?.t0_w ?? 0, h = this.geom?.t0_h ?? 0;
+    if (cells?.length !== w * h) return;
+
+    const stats = new Map<number, { x: number; y: number; n: number }>();
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const id = cells[y * w + x] ?? 65535;
+      if (id === 65535) continue;
+      const p = stats.get(id) ?? { x: 0, y: 0, n: 0 };
+      p.x += x + 0.5; p.y += y + 0.5; p.n++;
+      stats.set(id, p);
+    }
+
+    const names = new Map((overlay.kingdoms ?? []).map((k) => [k.id, k.name]));
+    for (const [id, p] of stats) {
+      const name = names.get(id);
+      if (!name) continue;
+      const text = new Text({
+        text: name,
+        style: new TextStyle({
+          fontFamily: ['Palatino Linotype', 'Book Antiqua', 'Palatino', 'Georgia', 'serif'],
+          fontSize: 15,
+          fill: '#fff8e7',
+          fontWeight: 'bold',
+          letterSpacing: 0.8,
+          stroke: { color: '#332b28', width: 4, join: 'round' },
+          dropShadow: { color: '#000000', alpha: 0.28, blur: 2, distance: 1 },
+        }),
+        anchor: 0.5,
+        resolution: 2,
+      });
+      (text as Text & { __kingdom?: { x: number; y: number; n: number } }).__kingdom = p;
+      (text as Text & { __kingdomId?: number }).__kingdomId = id;
+      this.kingdomLabels.addChild(text);
+    }
+    this.updateKingdomLabels();
+  }
+
+  private updateKingdomLabels() {
+    if (!this.kingdomOverlayOn || !this.geom || !this.kingdomLabels.children.length) {
+      this.kingdomLabels.visible = false;
+      return;
+    }
+    this.kingdomLabels.visible = true;
+    const cell = this.geom.t0_cell_ft;
+    const scale = cell * this.cam.ppf;
+    const minPx = 9;
+    for (const child of this.kingdomLabels.children) {
+      const text = child as Text & { __kingdom?: { x: number; y: number; n: number } };
+      const p = text.__kingdom;
+      if (!p) continue;
+      const px = Math.sqrt(p.n) * scale;
+      const visible = px >= minPx;
+      text.visible = visible;
+      if (visible) {
+        const wx = p.x * cell, wy = p.y * cell;
+        const [sx, sy] = this.cam.worldToScreen(wx, wy);
+        text.position.set(sx, sy);
+        const size = Math.max(10, Math.min(22, 13 + Math.log2(Math.max(1, px / 80)) * 2));
+        text.scale.set(size / 15);
+      }
+    }
   }
 
   setSelectedFeature(feature: Feature | null) {
@@ -759,6 +835,7 @@ export class MapView {
     this.kingdomSeed = world.seed >>> 0;
     this.kingdomLayer.visible = this.kingdomOverlayOn;
     this.kingdomLayer.clear();
+    this.kingdomLabels.removeChildren().forEach((child) => child.destroy());
     if (this.kingdomFillTexture) { this.kingdomFillTexture.destroy(true); this.kingdomFillTexture = null; }
     this.kingdomFill.texture = Texture.WHITE;
     this.kingdomFill.visible = false;
@@ -784,6 +861,7 @@ export class MapView {
     this.app.stage.addChild(this.tiles.container);
     this.app.stage.addChild(this.kingdomFill);
     this.app.stage.addChild(this.kingdomLayer);
+    this.app.stage.addChild(this.kingdomLabels);
     this.app.stage.addChild(this.selectedRiverLayer);
     this.app.stage.addChild(this.battle.container);
     this.drawKingdomOverlay();
@@ -1057,6 +1135,7 @@ export class MapView {
         this.gen.want(want);
       }
       this.drawKingdomOverlay();
+      this.updateKingdomLabels();
       this.drawSelectedRiver();
       const t1 = performance.now();
       this.labels?.update(this.cam, now);
