@@ -11,6 +11,7 @@ import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
 import type { Sketcher } from '../editor/sketcher';
 import { RIVER_Q, TileLayer, type LayerStats } from './TileLayer';
+import { buildKingdomColours, kingdomCssColour } from '../gen/kingdomColors';
 
 export interface InteriorState {
   id: string;
@@ -197,6 +198,7 @@ export class MapView {
   private kingdomOverlayOn = false;
   private selectedKingdom: number | null = null;
   private kingdomSeed = 0;
+  private kingdomColours = new Map<number, number>();
   /** Cached political geometry. It is built once per generated overlay, then only transformed with the camera. */
   private kingdomBuiltOverlay: Overlay | null = null;
   private kingdomBuiltSelection: number | null = null;
@@ -275,20 +277,7 @@ export class MapView {
     this.drawKingdomOverlay();
   }
 
-  private kingdomColor(id: number): number {
-    // Bright, toy-like territory colours inspired by WorldBox. Keep the palette
-    // deliberately high-contrast so neighbouring kingdoms never dissolve into the same
-    // muddy brown/grey cartography soup.
-    const palette = [
-      0xf05a5a, 0x4f8df7, 0x62c370, 0xf2c94c, 0x9b72e8, 0x35b9c8,
-      0xf08a4b, 0xe86aa8, 0x79a94b, 0x6f78d9, 0xe7a84b, 0x4db6ac,
-      0xd85b78, 0x5ca6d6, 0x8d68c7, 0xc5a94b, 0x59a86c, 0xd9785f,
-      0x6b9bd1, 0xb96bb5, 0x8caf54, 0xd6a05d, 0x5d9d9a, 0xb86d6d,
-    ];
-    let h = Math.imul((this.kingdomSeed ^ Math.imul(id + 1, 0x9e3779b9)) >>> 0, 0x85ebca6b) >>> 0;
-    h ^= h >>> 16;
-    return palette[h % palette.length] ?? 0x7c7c7c;
-  }
+  private kingdomColor(id: number): number { return this.kingdomColours.get(id) ?? 0x7c7c7c; }
 
   private kingdomCorner(x: number, y: number): [number, number] {
     // Political geometry is generated on the T0 raster. Do not perturb its corners: the
@@ -471,26 +460,35 @@ export class MapView {
       stats.set(id, p);
     }
 
+    const featuresById = new Map(overlay.features.map((f) => [f.id, f]));
+    const settlementsByKingdom = new Map<number, Feature>();
+    for (const f of overlay.features) {
+      if (f.kingdom_id === undefined || !['metropolis', 'city', 'town', 'village'].includes(f.kind)) continue;
+      if (f.political_rank === 'capital') settlementsByKingdom.set(f.kingdom_id, f);
+    }
     const names = new Map((overlay.kingdoms ?? []).map((k) => [k.id, k.name]));
-    for (const [id, p] of stats) {
-      const name = names.get(id);
-      if (!name) continue;
+    for (const k of overlay.kingdoms ?? []) {
+      const p = stats.get(k.id);
+      if (!p) continue;
+      const capital = settlementsByKingdom.get(k.id) ?? (k.capital >= 0 ? featuresById.get(String(k.capital)) : undefined);
       const text = new Text({
-        text: name,
+        text: k.name,
         style: new TextStyle({
           fontFamily: ['Palatino Linotype', 'Book Antiqua', 'Palatino', 'Georgia', 'serif'],
           fontSize: 15,
-          fill: '#fff8e7',
+          fill: kingdomCssColour(this.kingdomColor(k.id)),
           fontWeight: 'bold',
           letterSpacing: 0.8,
-          stroke: { color: '#332b28', width: 4, join: 'round' },
-          dropShadow: { color: '#000000', alpha: 0.28, blur: 2, distance: 1 },
+          stroke: { color: '#fff8e7', width: 4, join: 'round' },
+          dropShadow: { color: '#000000', alpha: 0.32, blur: 2, distance: 1 },
         }),
         anchor: 0.5,
         resolution: 2,
       });
-      (text as Text & { __kingdom?: { x: number; y: number; n: number } }).__kingdom = p;
-      (text as Text & { __kingdomId?: number }).__kingdomId = id;
+      (text as Text & { __kingdom?: { x: number; y: number; n: number } }).__kingdom = capital
+        ? { x: capital.x / (this.geom?.t0_cell_ft ?? 1), y: capital.y / (this.geom?.t0_cell_ft ?? 1), n: p.n }
+        : p;
+      (text as Text & { __kingdomId?: number }).__kingdomId = k.id;
       this.kingdomLabels.addChild(text);
     }
     this.updateKingdomLabels();
@@ -953,6 +951,7 @@ export class MapView {
     this.kingdomHighlightLayer.clear();
     this.overlay = this.baseOverlay = overlay;
     this.kingdomSeed = world.seed >>> 0;
+    this.kingdomColours = buildKingdomColours(overlay.kingdoms ?? [], this.kingdomSeed);
     this.kingdomLayer.visible = this.kingdomOverlayOn;
     this.kingdomLayer.clear();
     this.kingdomBorderLayer.clear();
