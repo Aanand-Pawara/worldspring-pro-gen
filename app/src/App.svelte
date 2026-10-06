@@ -80,13 +80,19 @@
   let inside = $state<InteriorState | null>(null);
   let places = $state(readPlaces());
   let kingdoms = $state(readKingdoms());
+  let kingdomDetailId = $state<number | null>(null);
   function readKingdoms(): boolean { try { return localStorage.getItem('map.kingdoms') !== '0'; } catch { return true; } }
   function selectKingdom(id: number) {
     kingdoms = true;
+    kingdomDetailId = id;
     try { localStorage.setItem('map.kingdoms', '1'); } catch {}
     view.setKingdomOverlay(true);
     view.setKingdomSelection(id);
+    const capital = overlay?.features.find((feature) => feature.kingdom_id === id && feature.political_rank === 'capital');
+    if (capital) flyToSize(capital.x, capital.y, Math.max(60 * 5280, capital.extent_ft * 18));
+    go('world', 'almanac');
   }
+  function closeKingdomDetail() { kingdomDetailId = null; }
 
   function openWorldTab(tab: 'generate' | 'sketch' | 'almanac' | 'library') {
     // World tabs must use the same lifecycle gate as section navigation.
@@ -95,6 +101,7 @@
 
   function setKingdoms(on: boolean) {
     kingdoms = on;
+    if (!on) kingdomDetailId = null;
     try { localStorage.setItem('map.kingdoms', on ? '1' : '0'); } catch {}
     view.setKingdomOverlay(on);
   }
@@ -1289,7 +1296,11 @@
     else if (hit?.kind === 'settlement' && overlay) {
       const feature = settlementAt(overlay, hit.x, hit.y);
       selection = feature ? { kind: 'feature', feature } : null;
-    } else selection = null;
+    } else {
+      const kingdom = view.kingdomAt(x, y);
+      if (kingdom !== null) selectKingdom(kingdom);
+      else selection = null;
+    }
   }
 
   /** Undo and redo go to the designer's history while it is open, then the sketch's (which has
@@ -1612,7 +1623,7 @@
               </div>
             {/if}
           {:else if shell.tabs.world === 'almanac'}
-            <AlmanacTab {world} {overlay} onSelect={(f) => select({ kind: 'feature', feature: f })} onSelectKingdom={selectKingdom} />
+            <AlmanacTab {world} {overlay} kingdomId={kingdomDetailId} onCloseKingdom={closeKingdomDetail} onSelect={(f) => select({ kind: 'feature', feature: f })} onSelectKingdom={selectKingdom} />
           {:else}
             <LibraryTab {world} {busy} onOpen={openWorld} onStartOver={startOver} />
           {/if}
