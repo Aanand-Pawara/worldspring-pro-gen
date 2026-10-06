@@ -79,6 +79,13 @@
   let selection = $state.raw<Selection | null>(null);
   let inside = $state<InteriorState | null>(null);
   let places = $state(readPlaces());
+  let kingdoms = $state(readKingdoms());
+  function readKingdoms(): boolean { try { return localStorage.getItem('map.kingdoms') !== '0'; } catch { return true; } }
+  function setKingdoms(on: boolean) {
+    kingdoms = on;
+    try { localStorage.setItem('map.kingdoms', on ? '1' : '0'); } catch {}
+    view.setKingdomOverlay(on);
+  }
 
   /** Business pins on or off, as this viewer left them (on at first). */
   function readPlaces(): boolean {
@@ -1389,6 +1396,7 @@
     view.onPick = (x, y, sx, sy) => void pick(x, y, sx, sy);
     view.onPlaces = (on) => setPlaces(on);
     view.setPlaces(places);
+    view.setKingdomOverlay(kingdoms);
     view.onMoves = (list, x, y) => (moves = list.length ? { list, x, y } : null);
     const onKey = createKeyHandler(() => keymap, () => shell.help || !!shell.ask || !!versionAsk);
     window.addEventListener('keydown', onKey);
@@ -1743,11 +1751,14 @@
   <MapControls
     grid={gridOn}
     {places}
+    kingdoms={kingdoms}
+    kingdomList={overlay?.kingdoms ?? []}
     battlemap={battlemapTier}
     {canUndo}
     {undoLabel}
     onGrid={setGrid}
     onPlaces={(on) => view.setPlaces(on)}
+    onKingdoms={setKingdoms}
     onZoom={zoomStep}
     onWhole={wholeMap}
     onUndo={undoAny}

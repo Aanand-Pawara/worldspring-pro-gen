@@ -23,6 +23,7 @@ export interface WorldParams {
   river_density: number;
   settlement_density: number;
   poi_density: number;
+  generate_kingdoms: boolean;
   biome_weights: Record<string, number>;
 }
 
@@ -437,6 +438,8 @@ export interface Feature {
 
 export interface Overlay {
   features: Feature[];
+  kingdoms: { id: number; name: string; capital: number; population: number; area_cells: number; cities: number; towns: number; villages: number }[];
+  kingdom_borders: { kingdom: number; other: number; a: [number, number]; b: [number, number] }[];
   /** The sketch's conflicts, when the world was drawn. */
   conflicts?: Conflict[];
 }

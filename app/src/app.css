@@ -10,11 +10,11 @@ body {
    Components use these tokens and the `ws-` classes instead of their own copies. Layout rules
    live under `[data-layout]`, which only the map's window sets. */
 :root {
-  --paper: rgba(243, 236, 216, 0.96);
+  --paper: rgba(248, 242, 226, 0.97);
   --paper-solid: #f3ecd8;
-  --field: #fbf7ec;
-  --btn: #e6dcc2;
-  --btn-hover: #e2d5b0;
+  --field: #fffdf7;
+  --btn: #e9dfc7;
+  --btn-hover: #ded1ad;
   --btn-on: #cdbb8c;
   --ink: #2b241d;
   --ink-2: #5a4a36;
@@ -23,16 +23,16 @@ body {
   --line-soft: #b9a987;
   --line-field: #8a7a60;
   --line-faint: rgba(58, 50, 42, 0.2);
-  --accent: #5a4632;
+  --accent: #4f3a2a;
   --accent-ink: #f5ecd6;
-  --gold: #b45309;
+  --gold: #9a6518;
   --danger: #8b2e2e;
   --warn: #9a3412;
   --ok: #3f6212;
   --radius: 6px;
   --radius-sm: 4px;
-  --shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
-  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.3);
+  --shadow: 0 2px 8px rgba(35, 27, 18, 0.18);
+  --shadow-lg: 0 8px 28px rgba(35, 27, 18, 0.24);
   --font: Georgia, 'Times New Roman', serif;
   --mono: ui-monospace, Consolas, monospace;
   /* The height of a button, a field or a row you can tap. */
@@ -58,6 +58,7 @@ body {
 }
 
 .ws-panel {
+  backdrop-filter: blur(8px);
   box-sizing: border-box;
   background: var(--paper);
   border: 1px solid var(--line);
@@ -373,3 +374,11 @@ input[type='checkbox'].ws-switch:focus-visible {
   outline: 2px solid var(--gold);
   outline-offset: 1px;
 }
+
+
+/* Shared polish: calmer hierarchy, better hover/focus feedback and tighter panel rhythm. */
+.ws-panel h2, .ws-panel h3 { text-wrap: balance; }
+.ws-btn, .ws-icon-btn, .ws-chip, .ws-input, .ws-seg { transition: background .12s ease, border-color .12s ease, box-shadow .12s ease, transform .08s ease; }
+.ws-btn:active:not(:disabled), .ws-icon-btn:active:not(:disabled), .ws-chip:active:not(:disabled) { transform: translateY(1px); }
+.ws-panel button, .ws-panel input, .ws-panel textarea, .ws-panel select { -webkit-tap-highlight-color: transparent; }
+@media (max-width: 700px) { .ws-panel { border-radius: 8px; } }

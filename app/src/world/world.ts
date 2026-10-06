@@ -26,6 +26,7 @@ export const DEFAULT_PARAMS: WorldParams = {
   river_density: 1,
   settlement_density: 1,
   poi_density: 1,
+  generate_kingdoms: true,
   biome_weights: {},
 };
 

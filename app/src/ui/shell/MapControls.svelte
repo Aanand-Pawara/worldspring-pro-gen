@@ -9,18 +9,21 @@
   interface Props {
     grid: boolean;
     places: boolean;
+    kingdoms: boolean;
+    kingdomList: { id: number; name: string }[];
     /** Zoomed in far enough for the grid to show. */
     battlemap: boolean;
     canUndo: boolean;
     undoLabel: string | null;
     onGrid: (on: boolean) => void;
     onPlaces: (on: boolean) => void;
+    onKingdoms: (on: boolean) => void;
     onZoom: (d: number) => void;
     onWhole: () => void;
     onUndo: () => void;
     floors?: Snippet;
   }
-  let { grid, places, battlemap, canUndo, undoLabel, onGrid, onPlaces, onZoom, onWhole, onUndo, floors }: Props = $props();
+  let { grid, places, kingdoms, kingdomList, battlemap, canUndo, undoLabel, onGrid, onPlaces, onKingdoms, onZoom, onWhole, onUndo, floors }: Props = $props();
 
   const layers = $derived(shell.menu === 'layers');
 </script>
@@ -46,6 +49,14 @@
           <kbd class="ws-kbd">P</kbd>
           <input type="checkbox" class="ws-switch" checked={places} onchange={(e) => onPlaces(e.currentTarget.checked)} />
         </label>
+        <label class="row">
+          <Icon name="flag" />
+          <span class="text">Kingdom borders<span class="ws-muted">{kingdomList.length ? `${kingdomList.length} realms in this world` : 'Generate kingdoms first'}</span></span>
+          <input type="checkbox" class="ws-switch" checked={kingdoms} disabled={!kingdomList.length} onchange={(e) => onKingdoms(e.currentTarget.checked)} />
+        </label>
+        {#if kingdoms && kingdomList.length}
+          <div class="kingdom-list">{#each kingdomList as k (k.id)}<div><i style:background={`hsl(${(k.id * 137.508) % 360} 48% 52%)`}></i><span>{k.name}</span></div>{/each}</div>
+        {/if}
       </div>
     {/if}
     <button class="ctl" class:on={layers} onclick={() => (shell.menu = layers ? null : 'layers')} aria-label="Layers" aria-expanded={layers} title="Layers: grid, place names"><Icon name="layers" /></button>
@@ -151,6 +162,10 @@
     font-size: 11px;
   }
 
+  .kingdom-list { display:flex; flex-direction:column; gap:3px; padding:4px 8px 6px 34px; border-top:1px solid var(--line-faint); }
+  .kingdom-list div { display:flex; align-items:center; gap:6px; min-width:0; font-size:10px; }
+  .kingdom-list i { width:9px; height:9px; border-radius:50%; border:1px solid rgba(58,50,42,.45); flex:none; }
+  .kingdom-list span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .phone {
     right: 8px;
     bottom: calc(var(--tabbar-h, 0px) + var(--sheet-h, 0px) + 10px);

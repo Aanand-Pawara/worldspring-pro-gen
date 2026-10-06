@@ -54,6 +54,9 @@ pub struct WorldParams {
     pub settlement_density: f64,
     /// Multiplies how many ruins, towers and other points of interest are placed, 0..3.
     pub poi_density: f64,
+    /// Whether to generate political kingdoms, capitals and territory borders.
+    #[serde(default = "default_generate_kingdoms")]
+    pub generate_kingdoms: bool,
     /// Per-biome weight by name (see `t0::biome::Biome::name`); missing = 1, 0 disables.
     pub biome_weights: BTreeMap<String, f64>,
 }
@@ -78,6 +81,7 @@ impl Default for WorldParams {
             river_density: 1.0,
             settlement_density: 1.0,
             poi_density: 1.0,
+            generate_kingdoms: true,
             biome_weights: BTreeMap::new(),
         }
     }
@@ -181,6 +185,8 @@ pub struct Stroke {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
+
+fn default_generate_kingdoms() -> bool { true }
 
 fn default_radius() -> f64 {
     5.0 * FT_PER_MILE

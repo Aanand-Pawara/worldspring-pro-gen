@@ -182,6 +182,9 @@ export class MapView {
   private readonly toolLayer = new Graphics();
   /** Selected river highlight, deliberately separate from the always-on river renderer. */
   private readonly selectedRiverLayer = new Graphics();
+  private readonly kingdomLayer = new Graphics();
+  private kingdomOverlayOn = false;
+  private kingdomSeed = 0;
   private selectedRiver: Feature | null = null;
   private toolDrawn = false;
   private toolPointer: number | null = null;
@@ -241,6 +244,40 @@ export class MapView {
   }
 
   /** Highlight only a selected river. Normal rivers stay in the normal map layer. */
+  setKingdomOverlay(on: boolean) {
+    this.kingdomOverlayOn = on;
+    this.kingdomLayer.visible = on;
+    this.drawKingdomBorders();
+  }
+
+  private kingdomColor(id: number): number {
+    let h = Math.imul((this.kingdomSeed ^ Math.imul(id + 1, 0x45d9f3b)) >>> 0, 0x27d4eb2d) >>> 0;
+    h ^= h >>> 15; h = Math.imul(h, 0x85ebca6b) >>> 0; h ^= h >>> 13;
+    const r = 96 + (h & 0x5f), g = 78 + ((h >>> 8) & 0x6f), b = 82 + ((h >>> 16) & 0x6f);
+    return (r << 16) | (g << 8) | b;
+  }
+
+  private drawKingdomBorders() {
+    const g = this.kingdomLayer;
+    g.clear();
+    const overlay = this.overlay;
+    if (!this.kingdomOverlayOn || !overlay?.kingdom_borders?.length || !this.geom) return;
+    const byKingdom = new Map<number, typeof overlay.kingdom_borders>();
+    for (const s of overlay.kingdom_borders) {
+      const list = byKingdom.get(s.kingdom) ?? [];
+      list.push(s); byKingdom.set(s.kingdom, list);
+    }
+    for (const [kingdom, segments] of byKingdom) {
+      const color = this.kingdomColor(kingdom);
+      for (const s of segments) {
+        const a = this.cam.worldToScreen(s.a[0] * this.geom.t0_cell_ft, s.a[1] * this.geom.t0_cell_ft);
+        const b = this.cam.worldToScreen(s.b[0] * this.geom.t0_cell_ft, s.b[1] * this.geom.t0_cell_ft);
+        g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]);
+      }
+      g.stroke({ width: Math.max(1.5, Math.min(5, this.cam.ppf * this.geom.t0_cell_ft * 0.035)), color, alpha: 0.9, join: 'round', cap: 'round' });
+    }
+  }
+
   setSelectedFeature(feature: Feature | null) {
     this.selectedRiver = feature?.kind === 'river' && (feature.river_path?.length ?? 0) > 1 ? feature : null;
     this.drawSelectedRiver();
@@ -669,6 +706,9 @@ export class MapView {
     this.selectedRiver = null;
     this.selectedRiverLayer.clear();
     this.overlay = this.baseOverlay = overlay;
+    this.kingdomSeed = world.seed >>> 0;
+    this.kingdomLayer.visible = this.kingdomOverlayOn;
+    this.kingdomLayer.clear();
     this.tiles = new TileLayer(geom, this.gen);
     this.labels = new Labels(overlay.features);
     // The generators have the world's edits already; the labels take them now.
@@ -688,6 +728,7 @@ export class MapView {
     this.battle.sprites = this.edits.sprites ?? {};
     this.battle.warmup();
     this.app.stage.addChild(this.tiles.container);
+    this.app.stage.addChild(this.kingdomLayer);
     this.app.stage.addChild(this.selectedRiverLayer);
     this.app.stage.addChild(this.battle.container);
     this.app.stage.addChild(this.playUnder);
@@ -959,6 +1000,7 @@ export class MapView {
         this.lastWantKey = wantKey;
         this.gen.want(want);
       }
+      this.drawKingdomBorders();
       this.drawSelectedRiver();
       const t1 = performance.now();
       this.labels?.update(this.cam, now);
