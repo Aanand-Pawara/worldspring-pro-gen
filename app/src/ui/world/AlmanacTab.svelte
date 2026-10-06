@@ -17,7 +17,7 @@
   let ranking = $state<'settlements' | 'terrain' | 'water' | 'regions'>('settlements');
   let shown = $state(0);
 
-  const ALMANAC_MODES = [{ key: 'overview', label: 'Overview', icon: 'globe' }, { key: 'kingdoms', label: 'Kingdoms', icon: 'castle' }, { key: 'facts', label: 'Facts', icon: 'dice' }, { key: 'rankings', label: 'Rankings', icon: 'activity' }];
+  const ALMANAC_MODES = [{ key: 'overview', label: 'Overview', icon: 'globe' }, { key: 'kingdoms', label: 'Kingdoms', icon: 'building' }, { key: 'facts', label: 'Facts', icon: 'dice' }, { key: 'rankings', label: 'Rankings', icon: 'activity' }];
   const RANKING_MODES = [{ key: 'settlements', label: 'Settlements' }, { key: 'terrain', label: 'Terrain' }, { key: 'water', label: 'Water' }, { key: 'regions', label: 'Biomes' }];
 
   // The view consumes one model boundary. Add new Almanac data in model.ts, not here.

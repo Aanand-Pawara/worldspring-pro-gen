@@ -87,16 +87,6 @@
     try { localStorage.setItem('map.kingdoms', '1'); } catch {}
   }
 
-  function openAlmanac() {
-    go('world', 'almanac');
-    if (shell.section === 'world') {
-      shell.tabs.world = 'almanac';
-      shell.collapsed = false;
-      shell.card = false;
-      shell.snap = 'half';
-    }
-  }
-
   function setKingdoms(on: boolean) {
     kingdoms = on;
     try { localStorage.setItem('map.kingdoms', on ? '1' : '0'); } catch {}
@@ -1567,7 +1557,7 @@
         { key: 'library', label: 'Library', icon: 'folder' },
       ]}
       tab={shell.tabs.world}
-      onTab={(k) => k === 'almanac' ? openAlmanac() : go('world', k)}
+      onTab={(k) => go('world', k)}
       onClose={() => go(null)}
       ask={shell.ask ? askBar : undefined}
     >
