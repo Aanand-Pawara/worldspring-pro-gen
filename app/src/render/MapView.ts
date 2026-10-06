@@ -276,20 +276,27 @@ export class MapView {
 
   private drawKingdomOverlay() {
     const g = this.kingdomLayer, overlay = this.overlay;
-    if (!this.kingdomOverlayOn || !this.geom || !overlay?.kingdom_cells?.length) { g.visible = false; return; }
+    if (!this.kingdomOverlayOn || !this.geom || !overlay || (!overlay.kingdom_cells?.length && !(overlay.kingdom_borders?.length))) {
+      g.visible = false;
+      return;
+    }
     g.visible = true;
-    const cell = this.geom.t0_cell_ft, scale = cell * this.cam.ppf;
+    const cell = this.geom.t0_cell_ft;
+    const scale = cell * this.cam.ppf;
+    if (!(scale > 0)) return;
     if (this.kingdomBuiltOverlay !== overlay) {
       g.clear();
       const w = this.geom.t0_w, h = this.geom.t0_h;
+      const cells = overlay.kingdom_cells;
       const runs = new Map<number, { x: number; y: number; n: number }[]>();
-      for (let y = 0; y < h; y++) {
+      // The border data is still useful when an older/generated overlay has no cell raster.
+      if (cells?.length === w * h) for (let y = 0; y < h; y++) {
         let x = 0;
         while (x < w) {
-          const id = overlay.kingdom_cells[y * w + x] ?? 65535;
+          const id = cells[y * w + x] ?? 65535;
           if (id === 65535) { x++; continue; }
           const x0 = x;
-          while (x + 1 < w && (overlay.kingdom_cells[y * w + x + 1] ?? 65535) === id) x++;
+          while (x + 1 < w && (cells[y * w + x + 1] ?? 65535) === id) x++;
           const list = runs.get(id) ?? []; list.push({ x: x0, y, n: x - x0 + 1 }); runs.set(id, list); x++;
         }
       }
@@ -309,7 +316,7 @@ export class MapView {
       for (const [kingdom, segments] of byKingdom) {
         const color = this.kingdomColor(kingdom);
         for (const s of segments) { const a = this.kingdomCorner(s.a[0], s.a[1]), b = this.kingdomCorner(s.b[0], s.b[1]); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); }
-        g.stroke({ width: 0.035, color, alpha: 0.88, join: 'round', cap: 'round' });
+        g.stroke({ width: Math.max(0.035, 1.4 / scale), color, alpha: 0.92, join: 'round', cap: 'round' });
       }
       this.kingdomBuiltOverlay = overlay;
     }
