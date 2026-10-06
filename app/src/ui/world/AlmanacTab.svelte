@@ -369,6 +369,9 @@
   .kingdom-main { min-width:0; display:flex; flex-direction:column; gap:2px; }
   .kingdom-main strong { font-size:12px; }
   .kingdom-main small { color:var(--ink-3); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .empty { display:flex; gap:8px; align-items:center; color:var(--ink-3); padding:12px 4px; font-size:12px; }\n  .loading { min-height:90px; justify-content:center; }\n  .spinner { width:14px; height:14px; border:2px solid var(--line-soft); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; }\n  @keyframes spin { to { transform:rotate(360deg); } }
+  .empty { display:flex; gap:8px; align-items:center; color:var(--ink-3); padding:12px 4px; font-size:12px; }
+  .loading { min-height:90px; justify-content:center; }
+  .spinner { width:14px; height:14px; border:2px solid var(--line-soft); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
   .muted { color:var(--ink-3); font-size:11px; padding:4px; }
 </style>
