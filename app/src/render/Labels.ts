@@ -191,8 +191,8 @@ export class Labels {
 
   constructor(features: Feature[]) {
     this.items = features
-      .filter((f) => STYLES[f.kind])
-      .map((f) => ({ f, orig: f.name, style: STYLES[f.kind], text: null }));
+      .filter((f) => Object.prototype.hasOwnProperty.call(STYLES, f.kind))
+      .map((f) => ({ f, orig: f.name, style: STYLES[f.kind]!, text: null }));
     this.sort();
   }
 
@@ -229,7 +229,8 @@ export class Labels {
     let added = 0;
     for (const h of hits) {
       if (this.placeHits.has(h.id) || !h.category) continue;
-      const [color, glyph, minPx, prio] = PLACE[h.category] ?? ['#57534e', '●', 14, 20];
+      const place = h.category && Object.prototype.hasOwnProperty.call(PLACE, h.category) ? PLACE[h.category] : undefined;
+      const [color, glyph, minPx, prio] = place ?? ['#57534e', '●', 14, 20];
       this.placeHits.set(h.id, h);
       const f: Feature = { id: h.id, kind: 'place', name: buildingName(h, renames), x: h.x, y: h.y, angle: 0, extent_ft: PLACE_EXTENT_FT, detail: h.function };
       // Bigger buildings win ties within a category.
@@ -409,7 +410,7 @@ export class Labels {
     const textStyle = new TextStyle({
       fontFamily: FONT,
       fontSize: style.size,
-      fill: style.fill,
+      fill: style.fill ?? INK,
       fontStyle: style.italic ? 'italic' : 'normal',
       fontWeight: style.bold ? 'bold' : 'normal',
       stroke: { color: '#efe6cf', width: 3, join: 'round' },
@@ -429,7 +430,7 @@ export class Labels {
       style: new TextStyle({
         fontFamily: FONT,
         fontSize: style.size,
-        fill: style.fill,
+        fill: style.fill ?? INK,
         letterSpacing: style.spacing,
         fontStyle: style.italic ? 'italic' : 'normal',
         fontWeight: style.bold ? 'bold' : 'normal',
@@ -504,7 +505,7 @@ export class Labels {
       this.unletter(it);
       this.items.splice(k, 1);
     }
-    for (const f of features) if (STYLES[f.kind]) this.items.push({ f, orig: f.name, style: STYLES[f.kind], text: null });
+    for (const f of features) if (Object.prototype.hasOwnProperty.call(STYLES, f.kind)) this.items.push({ f, orig: f.name, style: STYLES[f.kind]!, text: null });
     this.sort();
     this.lastZoom = NaN;
   }

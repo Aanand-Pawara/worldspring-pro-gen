@@ -273,7 +273,7 @@ export class MapView {
     ];
     let h = Math.imul((this.kingdomSeed ^ Math.imul(id + 1, 0x9e3779b9)) >>> 0, 0x85ebca6b) >>> 0;
     h ^= h >>> 16;
-    return palette[h % palette.length];
+    return palette[h % palette.length] ?? 0x64748b;
   }
 
   private kingdomCorner(x: number, y: number): [number, number] {
