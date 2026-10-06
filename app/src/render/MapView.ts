@@ -303,6 +303,7 @@ export class MapView {
     const g = this.kingdomLayer, overlay = this.overlay;
     if (!this.kingdomOverlayOn || !this.geom || !overlay || (!overlay.kingdom_cells?.length && !(overlay.kingdom_borders?.length))) {
       g.visible = false;
+      this.kingdomHighlightLayer.visible = false;
       return;
     }
     g.visible = true;
@@ -311,68 +312,141 @@ export class MapView {
     const cell = this.geom.t0_cell_ft;
     const scale = cell * this.cam.ppf;
     if (!(scale > 0)) return;
+
     if (this.kingdomBuiltOverlay !== overlay) {
       g.clear();
       const w = this.geom.t0_w, h = this.geom.t0_h;
       const cells = overlay.kingdom_cells;
       const runs = new Map<number, { x: number; y: number; n: number }[]>();
-      // The border data is still useful when an older/generated overlay has no cell raster.
-      if (cells?.length === w * h) for (let y = 0; y < h; y++) {
-        let x = 0;
-        while (x < w) {
-          const id = cells[y * w + x] ?? 65535;
-          if (id === 65535) { x++; continue; }
-          const x0 = x;
-          while (x + 1 < w && (cells[y * w + x + 1] ?? 65535) === id) x++;
-          const list = runs.get(id) ?? []; list.push({ x: x0, y, n: x - x0 + 1 }); runs.set(id, list); x++;
+
+      if (cells?.length === w * h) {
+        for (let y = 0; y < h; y++) {
+          let x = 0;
+          while (x < w) {
+            const id = cells[y * w + x] ?? 65535;
+            if (id === 65535) { x++; continue; }
+            const x0 = x;
+            while (x + 1 < w && (cells[y * w + x + 1] ?? 65535) === id) x++;
+            const list = runs.get(id) ?? [];
+            list.push({ x: x0, y, n: x - x0 + 1 });
+            runs.set(id, list);
+            x++;
+          }
         }
       }
+
+      // Paint the territory as a proper political layer. The stronger fill deliberately
+      // sits above terrain so kingdom identity remains visible instead of becoming terrain soup.
       for (const [kingdom, sourceRuns] of runs) {
         const color = this.kingdomColor(kingdom);
         const merged: { x: number; y: number; n: number; rows: number }[] = [];
         const active = new Map<string, { x: number; y: number; n: number; rows: number }>();
         for (const r of sourceRuns) {
-          const key = r.x + ':' + r.n, p = active.get(key);
+          const key = r.x + ':' + r.n;
+          const p = active.get(key);
           if (p && p.y + p.rows === r.y) p.rows++;
-          else { const n = { x: r.x, y: r.y, n: r.n, rows: 1 }; active.set(key, n); merged.push(n); }
+          else {
+            const n = { x: r.x, y: r.y, n: r.n, rows: 1 };
+            active.set(key, n);
+            merged.push(n);
+          }
         }
-        for (const r of merged) g.rect(r.x, r.y, r.n, r.rows).fill({ color, alpha: 0.22 });
+        for (const r of merged) g.rect(r.x, r.y, r.n, r.rows).fill({ color, alpha: 0.38 });
       }
-      const byKingdom = new Map<number, typeof overlay.kingdom_borders>();
-      for (const s of overlay.kingdom_borders ?? []) { const list = byKingdom.get(s.kingdom) ?? []; list.push(s); byKingdom.set(s.kingdom, list); }
-       for (const segments of byKingdom.values()) {
-         for (const s of segments) { const a = this.kingdomCorner(s.a[0], s.a[1]), b = this.kingdomCorner(s.b[0], s.b[1]); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); }
-       }
-       g.stroke({ width: Math.max(0.10, 2.4 / scale), color: 0x332b28, alpha: 0.72, join: 'round', cap: 'round' });
-       for (const [kingdom, segments] of byKingdom) {
-         const color = this.kingdomColor(kingdom);
-         for (const s of segments) { const a = this.kingdomCorner(s.a[0], s.a[1]), b = this.kingdomCorner(s.b[0], s.b[1]); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); }
-         g.stroke({ width: Math.max(0.06, 1.25 / scale), color, alpha: 0.96, join: 'round', cap: 'round' });
-       }
+
+      // Derive exposed political edges from the cell raster. This is the authoritative
+      // fallback for older overlays and guarantees visible borders even when border metadata
+      // is missing or sparse.
+      const edgeByKey = new Map<string, { kingdom: number; a: [number, number]; b: [number, number] }>();
+      const addEdge = (kingdom: number, ax: number, ay: number, bx: number, by: number) => {
+        const k = ax < bx || (ax === bx && ay <= by) ? `${ax},${ay},${bx},${by}` : `${bx},${by},${ax},${ay}`;
+        if (!edgeByKey.has(k)) edgeByKey.set(k, { kingdom, a: [ax, ay], b: [bx, by] });
+      };
+      if (cells?.length === w * h) {
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+          const kingdom = cells[y * w + x] ?? 65535;
+          if (kingdom === 65535) continue;
+          const neighbors: [number, number, number, number][] = [
+            [x + 1, y, x + 1, y + 1], [x, y + 1, x + 1, y + 1],
+            [x, y, x, y + 1], [x, y, x + 1, y],
+          ];
+          const other = [
+            x + 1 < w ? cells[y * w + x + 1] : 65535,
+            y + 1 < h ? cells[(y + 1) * w + x] : 65535,
+            x > 0 ? cells[y * w + x - 1] : 65535,
+            y > 0 ? cells[(y - 1) * w + x] : 65535,
+          ];
+          for (let i = 0; i < neighbors.length; i++) {
+            if ((other[i] ?? 65535) !== kingdom) addEdge(kingdom, ...neighbors[i]);
+          }
+        }
+      }
+
+      const byKingdom = new Map<number, { kingdom: number; a: [number, number]; b: [number, number] }[]>();
+      for (const s of edgeByKey.values()) {
+        const list = byKingdom.get(s.kingdom) ?? [];
+        list.push(s);
+        byKingdom.set(s.kingdom, list);
+      }
+
+      // Prefer generated frontier metadata when available, but raster-derived edges make the
+      // visual layer self-contained and resilient.
+      if (edgeByKey.size === 0) {
+        for (const s of overlay.kingdom_borders ?? []) {
+          const list = byKingdom.get(s.kingdom) ?? [];
+          list.push({ kingdom: s.kingdom, a: s.a, b: s.b });
+          byKingdom.set(s.kingdom, list);
+        }
+      }
+
+      for (const segments of byKingdom.values()) {
+        for (const s of segments) {
+          const a = this.kingdomCorner(s.a[0], s.a[1]), b = this.kingdomCorner(s.b[0], s.b[1]);
+          g.moveTo(a[0], a[1]);
+          g.lineTo(b[0], b[1]);
+        }
+      }
+      // Dark keyline first, then a coloured inner stroke. This gives the political boundary
+      // enough contrast to survive forests, mountains, rivers and shaded terrain underneath.
+      g.stroke({ width: Math.max(0.18, 3.2 / scale), color: 0x241f1c, alpha: 0.92, join: 'round', cap: 'round' });
+      for (const [kingdom, segments] of byKingdom) {
+        const color = this.kingdomColor(kingdom);
+        for (const s of segments) {
+          const a = this.kingdomCorner(s.a[0], s.a[1]), b = this.kingdomCorner(s.b[0], s.b[1]);
+          g.moveTo(a[0], a[1]);
+          g.lineTo(b[0], b[1]);
+        }
+        g.stroke({ width: Math.max(0.10, 1.65 / scale), color, alpha: 1, join: 'round', cap: 'round' });
+      }
+
       this.kingdomBuiltOverlay = overlay;
       this.buildKingdomLabels(overlay);
     }
+
     highlight.clear();
     if (this.selectedKingdom !== null && overlay.kingdom_cells?.length === this.geom.t0_w * this.geom.t0_h) {
       const selected = this.selectedKingdom;
       const w = this.geom.t0_w, h = this.geom.t0_h, cells = overlay.kingdom_cells;
-      for (let y = 0; y < h; y++) {
-        let x = 0;
-        while (x < w) {
-          if ((cells[y * w + x] ?? 65535) !== selected) { x++; continue; }
-          const x0 = x;
-          while (x + 1 < w && (cells[y * w + x + 1] ?? 65535) === selected) x++;
-          highlight.rect(x0, y, x - x0 + 1, 1).fill({ color: 0xffffff, alpha: 0.18 });
-          x++;
-        }
+      const edgeByKey = new Map<string, [number, number, number, number]>();
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        if ((cells[y * w + x] ?? 65535) !== selected) continue;
+        const add = (ax: number, ay: number, bx: number, by: number) => {
+          const k = ax < bx || (ax === bx && ay <= by) ? `${ax},${ay},${bx},${by}` : `${bx},${by},${ax},${ay}`;
+          edgeByKey.set(k, [ax, ay, bx, by]);
+        };
+        if (x + 1 >= w || cells[y * w + x + 1] !== selected) add(x + 1, y, x + 1, y + 1);
+        if (y + 1 >= h || cells[(y + 1) * w + x] !== selected) add(x, y + 1, x + 1, y + 1);
+        if (x === 0 || cells[y * w + x - 1] !== selected) add(x, y, x, y + 1);
+        if (y === 0 || cells[(y - 1) * w + x] !== selected) add(x, y, x + 1, y);
       }
-      for (const s of overlay.kingdom_borders ?? []) {
-        if (s.kingdom !== selected) continue;
-        const a = this.kingdomCorner(s.a[0], s.a[1]), b = this.kingdomCorner(s.b[0], s.b[1]);
-        highlight.moveTo(a[0], a[1]); highlight.lineTo(b[0], b[1]);
+      for (const [ax, ay, bx, by] of edgeByKey.values()) {
+        const a = this.kingdomCorner(ax, ay), b = this.kingdomCorner(bx, by);
+        highlight.moveTo(a[0], a[1]);
+        highlight.lineTo(b[0], b[1]);
       }
-      highlight.stroke({ width: Math.max(0.14, 3.2 / scale), color: 0xffffff, alpha: 0.95, join: 'round', cap: 'round' });
+      highlight.stroke({ width: Math.max(0.22, 4.5 / scale), color: 0xffffff, alpha: 0.98, join: 'round', cap: 'round' });
     }
+
     g.position.set(this.cam.width / 2 - (this.cam.cx / cell) * scale, this.cam.height / 2 - (this.cam.cy / cell) * scale);
     g.scale.set(scale);
     this.updateKingdomLabels();
