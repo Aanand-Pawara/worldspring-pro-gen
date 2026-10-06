@@ -44,6 +44,8 @@ function store(key: string, value: string) {
 }
 
 /** A benchmark run shows the developer stats; otherwise as this viewer left them (off at first). */
+import { openNavigation, closeNavigation, toggleNavigation, openTab } from './navigation.svelte';
+
 const bench = typeof location !== 'undefined' && new URLSearchParams(location.search).has('bench');
 
 class Shell {
@@ -84,6 +86,12 @@ class Shell {
     this.stats = on;
     if (!bench) store('ui.stats', on ? '1' : '0');
   }
+
+  /** Normalized shell transitions. App owns domain lifecycle; the shell owns layout state. */
+  open(section: Section, tab?: string) { openNavigation(this, section, tab); }
+  close() { closeNavigation(this); }
+  toggle(section: Section) { return toggleNavigation(this, section); }
+  tab(section: Exclude<Section, 'play'>, tab: string) { openTab(this, section, tab); }
 }
 
 export const shell = new Shell();

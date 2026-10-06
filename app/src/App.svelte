@@ -82,19 +82,15 @@
   let kingdoms = $state(readKingdoms());
   function readKingdoms(): boolean { try { return localStorage.getItem('map.kingdoms') !== '0'; } catch { return true; } }
   function selectKingdom(id: number) {
-    view.setKingdomSelection(id);
     kingdoms = true;
     try { localStorage.setItem('map.kingdoms', '1'); } catch {}
+    view.setKingdomOverlay(true);
+    view.setKingdomSelection(id);
   }
 
   function openWorldTab(tab: 'generate' | 'sketch' | 'almanac' | 'library') {
-    shell.tabs.world = tab;
-    shell.section = 'world';
-    shell.collapsed = false;
-    shell.card = false;
-    shell.snap = 'half';
-    if (tab === 'sketch' && !sketchOn) enterSketch();
-    syncTool();
+    // World tabs must use the same lifecycle gate as section navigation.
+    go('world', tab);
   }
 
   function setKingdoms(on: boolean) {
@@ -614,8 +610,8 @@
       if (shell.phone) shell.snap = 'half';
       shell.card = false;
     }
-    shell.section = to;
-    if (to && t) (shell.tabs as Record<string, string>)[to] = t;
+    if (to) shell.open(to, t);
+    else shell.close();
     if (editTab === 'scatter') armScatter();
     if (editTab === 'build') armBuild();
     if (editTab === 'design' && !designer) void openDesigner();
@@ -662,7 +658,7 @@
   function stopSketch() {
     if (sketchDirty()) return ask('sketch', stopSketch);
     if (sketchOn) leaveSketch();
-    shell.tabs.world = 'generate';
+    shell.tab('world', 'generate');
   }
 
   /** Open a world (saved or from a file); new sketch strokes are asked about first. */
@@ -1789,7 +1785,7 @@
     {canUndo}
     {undoLabel}
     onGrid={setGrid}
-    onPlaces={(on) => view.setPlaces(on)}
+    onPlaces={setPlaces}
     onKingdoms={setKingdoms}
     onZoom={zoomStep}
     onWhole={wholeMap}

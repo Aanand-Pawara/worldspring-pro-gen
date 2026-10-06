@@ -337,9 +337,6 @@
   h2 { margin:1px 0 2px; font-size:20px; }
   h3 { margin:0 0 6px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-2); }
   p { margin:0; color:var(--ink-2); font-size:12px; line-height:1.4; }
-  .subtabs,.rank-tabs { display:flex; gap:3px; overflow:auto; padding-bottom:1px; }
-  .subtabs button,.rank-tabs button { display:inline-flex; align-items:center; gap:4px; border:1px solid var(--line); background:transparent; color:var(--ink-2); border-radius:var(--radius-sm); padding:6px 8px; white-space:nowrap; cursor:pointer; font:11px var(--font); }
-  .subtabs button.on,.rank-tabs button.on { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
   .cards { display:grid; grid-template-columns:repeat(2,1fr); gap:4px; }
   .cards > div { padding:9px; background:var(--btn-hover); border:1px solid var(--line-faint); border-radius:var(--radius-sm); }
   .cards strong,.cards span { display:block; }
@@ -356,12 +353,6 @@
   .extremes span { display:flex; flex-direction:column; min-width:0; font-size:11px; }
   .extremes small { color:var(--ink-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .extremes b,.row strong { font:11px var(--mono); white-space:nowrap; }
-  .fact-card { padding:14px; border:1px solid var(--line); border-radius:var(--radius); background:var(--btn-hover); }
-  .tag { margin-bottom:8px; font-size:10px; letter-spacing:.08em; font-weight:bold; color:var(--ink-3); }
-  .fact { font-size:16px; line-height:1.5; }
-  .show { display:inline-flex; align-items:center; gap:5px; margin-top:12px; border:0; background:none; color:var(--ink-2); font:11px var(--font); cursor:pointer; padding:3px 0; }
-  .show:hover { color:var(--ink); }
-  .counter { color:var(--ink-3); font:10px var(--mono); text-align:center; }
   .fact-note { color:var(--ink-3); font-size:10px; line-height:1.4; padding:3px; }
   .row { all:unset; box-sizing:border-box; display:grid; grid-template-columns:22px 20px 1fr auto; align-items:center; gap:6px; width:100%; min-height:38px; padding:3px 4px; cursor:pointer; border-radius:var(--radius-sm); }
   .row:hover,.row:focus-visible { background:var(--btn-hover); }
