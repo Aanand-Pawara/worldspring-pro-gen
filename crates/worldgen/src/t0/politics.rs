@@ -47,6 +47,14 @@ fn edge_cost(a: usize, b: usize, w: usize, h: usize, cell_ft: f64, height: &[f64
     let lake_b = hydro.lake_of.get(b).copied().unwrap_or(hydro::NO_LAKE) != hydro::NO_LAKE;
     if lake_a || lake_b { cost += 110.0; }
 
+    // Major waterways tend to become durable political frontiers. Treat strong drainage cells
+    // as expensive to cross so borders naturally settle along rivers instead of cutting across
+    // them. The underlying terrain still dominates, so this is a tendency, not a hard wall.
+    let wa = hydro.water.get(a).copied().unwrap_or(hydro::DRY);
+    let wb = hydro.water.get(b).copied().unwrap_or(hydro::DRY);
+    let river_barrier = ((wa.max(wb) as f64) / 1200.0).clamp(0.0, 1.0);
+    cost += 85.0 * river_barrier;
+
     // A cell that stands well above its neighbours behaves like a ridge. This makes mountain
     // chains and escarpments hard to cross while still allowing low saddles/passes to remain
     // usable, which is much closer to how historical frontiers tend to form.
