@@ -861,11 +861,15 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
         .collect();
     for r in chains {
         if let Some(p) = r.into {
-            let join = *r.cells.last().unwrap();
-            if let Some(m) = chains[p].cells.iter().position(|&c| c == join) {
-                for (k, t) in tapers[p].iter_mut().enumerate() {
-                    let d = (k as i64 - m as i64).unsigned_abs() as f64;
-                    *t = t.min(crate::core::noise::smoothstep(0.0, 3.0, d) as f32);
+            // The tributary's terminal receiver is the authoritative parent junction.
+            // Taper the parent at that exact cell so its rendered centreline passes through
+            // the same point where the tributary terminates.
+            if let Some(join) = r.terminal_receiver {
+                if let Some(m) = chains[p].cells.iter().position(|&c| c == join) {
+                    for (k, t) in tapers[p].iter_mut().enumerate() {
+                        let d = (k as i64 - m as i64).unsigned_abs() as f64;
+                        *t = t.min(crate::core::noise::smoothstep(0.0, 3.0, d) as f32);
+                    }
                 }
             }
         }

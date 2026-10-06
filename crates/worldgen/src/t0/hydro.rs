@@ -577,6 +577,7 @@ mod hydrology_regression_tests {
             assert_eq!(tributary.into, rivers.iter().position(|r| std::ptr::eq(r, main)));
             let last = *tributary.cells.last().unwrap() as usize;
             let join = rec[last] as usize;
+            assert_eq!(tributary.terminal_receiver, Some(join as u32));
             assert!(main.cells.iter().any(|&cell| cell as usize == join));
         }
     }
