@@ -85,7 +85,7 @@
   });
 
   type Fact = { text: string; tag: string; feature?: Feature };
-  const facts = $derived.by<Fact[]>(() => {
+  const facts = $derived.by(() => {
     if (!overlay) return [];
     const out: Fact[] = [
       { text: `The generated world contains ${fmt(features.length)} named features across ${fmt(namedKinds)} feature types.`, tag: 'WORLD' },
@@ -110,6 +110,79 @@
     if (highestPeak && settlementsNearHighestPeak.length) out.push({ text: `${fmt(settlementsNearHighestPeak.length)} settlements have generated label anchors within 50 miles of ${name(highestPeak)}.`, tag: 'RELATION', feature: highestPeak });
     if (largestSettlement && nearbyPeak) out.push({ text: `${name(largestSettlement)} is about ${fmtMiles(nearbyPeak.d)} miles from the named peak ${name(nearbyPeak.f)}.`, tag: 'RELATION', feature: largestSettlement });
     if (largestSettlement && featuresNearLargestCity.length) out.push({ text: `${name(largestSettlement)} has ${fmt(featuresNearLargestCity.length)} other generated feature anchors within 25 miles.`, tag: 'RELATION', feature: largestSettlement });
+    // Expand the Almanac from highlights into a generated reference. Every statement below
+    // is derived from current world data, so the Almanac never invents lore.
+    for (const [kind, count] of regionCounts) {
+      out.push({ text: `${fmt(count)} named ${kind.replace('_', ' ')} regions were identified in the generated terrain.`, tag: 'CLIMATE' });
+    }
+    const featureCounts = new Map<string, number>();
+    for (const f of features) featureCounts.set(f.kind, (featureCounts.get(f.kind) ?? 0) + 1);
+    for (const [kind, count] of [...featureCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
+      out.push({ text: `${fmt(count)} generated features use the ${kind.replace('_', ' ')} category.`, tag: 'WORLD' });
+    }
+    for (const k of kingdoms) {
+      const share = totalPopulation ? Math.round((k.population / totalPopulation) * 100) : 0;
+      out.push({ text: `${k.name} controls about ${fmt(k.area_cells)} terrain cells and contains an estimated ${fmt(k.population)} people.`, tag: 'CIVILIZATION' });
+      out.push({ text: `${k.name} accounts for about ${fmt(share)}% of the generated settlement population.`, tag: 'CIVILIZATION' });
+      out.push({ text: `${k.name} has ${fmt(k.cities)} cities, ${fmt(k.towns)} towns and ${fmt(k.villages)} villages in the generated settlement network.`, tag: 'CIVILIZATION' });
+      if (k.capital?.name) out.push({ text: `${k.name} is administered from ${k.capital.name}, its generated capital settlement.`, tag: 'CIVILIZATION', feature: k.capital });
+    }
+    for (const f of settlementRank.slice(0, 10)) {
+      out.push({ text: `${name(f)} ranks among the ten largest generated settlements with an estimated population of ${fmt(population(f))}.`, tag: 'PEOPLE', feature: f });
+    }
+    for (const f of peakRank.slice(0, 10)) {
+      out.push({ text: `${name(f)} is one of the ten highest named summits in the generated world at ${fmt(Math.round(f.elev_ft ?? 0))} ft.`, tag: 'TERRAIN', feature: f });
+    }
+    for (const f of riverRank.slice(0, 10)) {
+      out.push({ text: `${name(f)} is one of the ten longest named rivers, measuring about ${fmtMiles(f.length_mi ?? miles(f.extent_ft))} miles.`, tag: 'WATER', feature: f });
+      if (f.stream_order) out.push({ text: `${name(f)} reaches stream order ${fmt(f.stream_order)}, describing its modeled position in the drainage hierarchy.`, tag: 'HYDROLOGY', feature: f });
+      if (f.drainage_area_mi2) out.push({ text: `${name(f)} drains about ${fmtMiles(f.drainage_area_mi2)} square miles in the generated hydrological model.`, tag: 'HYDROLOGY', feature: f });
+    }
+    for (const f of lakeRank.slice(0, 10)) {
+      out.push({ text: `${name(f)} is among the ten largest named lake-type features, covering about ${fmtMiles(f.area_mi2 ?? areaSqMi(f.extent_ft))} square miles.`, tag: 'WATER', feature: f });
+      if (f.has_outlet !== undefined) out.push({ text: `${name(f)} is modeled as a ${f.has_outlet ? 'flow-through lake with an outlet' : 'terminal lake without an outlet'}.`, tag: 'HYDROLOGY', feature: f });
+    }
+    for (const f of waterfalls.slice(0, 10)) {
+      out.push({ text: `${name(f)} is a generated waterfall feature with an estimated drop of ${fmt(drop(f))} ft.`, tag: 'WATER', feature: f });
+    }
+    for (const f of ranges.slice(0, 10)) {
+      out.push({ text: `${name(f)} is a generated mountain-range feature spanning about ${fmtMiles(f.length_mi ?? miles(f.extent_ft))} miles of stored extent.`, tag: 'TERRAIN', feature: f });
+    }
+    const coastalSettlements = settlements.filter((f) => f.coastal);
+    const riverSettlements = settlements.filter((f) => f.river);
+    const ports = settlements.filter((f) => f.kind === 'port');
+    const fortresses = settlements.filter((f) => f.kind === 'fortress');
+    const markets = settlements.filter((f) => f.kind === 'market');
+    const mining = settlements.filter((f) => f.kind === 'mining');
+    const farming = settlements.filter((f) => f.kind === 'farming');
+    const fishing = settlements.filter((f) => f.kind === 'fishing');
+    const lumber = settlements.filter((f) => f.kind === 'lumber');
+    const herding = settlements.filter((f) => f.kind === 'herding');
+    const oasis = settlements.filter((f) => f.kind === 'oasis');
+    out.push({ text: `${fmt(coastalSettlements.length)} settlements are flagged as coastal in the generated geography.`, tag: 'GEOGRAPHY' });
+    out.push({ text: `${fmt(riverSettlements.length)} settlements are associated with generated river access.`, tag: 'GEOGRAPHY' });
+    out.push({ text: `${fmt(ports.length)} settlements were classified as ports by the settlement generator.`, tag: 'CIVILIZATION' });
+    out.push({ text: `${fmt(fortresses.length)} settlements were classified as fortresses by the settlement generator.`, tag: 'CIVILIZATION' });
+    out.push({ text: `${fmt(markets.length)} settlements were classified as markets by the settlement generator.`, tag: 'CIVILIZATION' });
+    out.push({ text: `${fmt(mining.length)} settlements were classified as mining centers by the settlement generator.`, tag: 'CIVILIZATION' });
+    out.push({ text: `${fmt(farming.length)} settlements were classified as farming centers by the settlement generator.`, tag: 'CIVILIZATION' });
+    out.push({ text: `${fmt(fishing.length)} settlements were classified as fishing centers by the settlement generator.`, tag: 'CIVILIZATION' });
+    out.push({ text: `${fmt(lumber.length)} settlements were classified as lumber centers by the settlement generator.`, tag: 'CIVILIZATION' });
+    out.push({ text: `${fmt(herding.length)} settlements were classified as herding centers by the settlement generator.`, tag: 'CIVILIZATION' });
+    out.push({ text: `${fmt(oasis.length)} settlements were classified as oases by the settlement generator.`, tag: 'CIVILIZATION' });
+    if (settlements.length) out.push({ text: `The generated settlement network averages about ${fmt(Math.round(totalPopulation / settlements.length))} people per named settlement.`, tag: 'PEOPLE' });
+    if (cities.length) out.push({ text: `There are ${fmt(cities.length)} city-tier settlements, representing ${fmt(cityPopulationShare)}% of the generated settlement population.`, tag: 'PEOPLE' });
+    if (capitals.length) out.push({ text: `The ${fmt(capitals.length)} generated capitals together account for about ${fmt(capitalPopulationShare)}% of settlement population.`, tag: 'CIVILIZATION' });
+    if (rivers.length) out.push({ text: `The named river network contains about ${fmtMiles(totalRiverMiles)} total river miles across ${fmt(rivers.length)} named river features.`, tag: 'HYDROLOGY' });
+    if (oceanRivers.length) out.push({ text: `${fmt(oceanRivers.length)} named rivers are modeled as reaching the ocean.`, tag: 'HYDROLOGY' });
+    if (inlandLakeRivers.length) out.push({ text: `${fmt(inlandLakeRivers.length)} named rivers terminate in generated lakes.`, tag: 'HYDROLOGY' });
+    if (lakeFedRivers.length) out.push({ text: `${fmt(lakeFedRivers.length)} named rivers begin from generated lakes, creating lake-fed drainage routes.`, tag: 'HYDROLOGY' });
+    if (terminalLakes.length) out.push({ text: `${fmt(terminalLakes.length)} named lakes are modeled as terminal basins.`, tag: 'HYDROLOGY' });
+    if (flowThroughLakes.length) out.push({ text: `${fmt(flowThroughLakes.length)} named lakes are modeled with an outlet and through-flow.`, tag: 'HYDROLOGY' });
+    if (volcanoes.length) out.push({ text: `The generated world contains ${fmt(volcanoes.length)} named volcanic features, including ${fmt(activeVolcanoes.length)} active systems.`, tag: 'GEOLOGY' });
+    if (ranges.length) out.push({ text: `${fmt(ranges.length)} named mountain-range features were extracted from the generated terrain.`, tag: 'TERRAIN' });
+    if (passes.length) out.push({ text: `${fmt(passes.length)} named mountain passes were identified as terrain corridors.`, tag: 'TERRAIN' });
+    if (regions.length) out.push({ text: `${fmt(regions.length)} named ecological and geographic regions were extracted from the generated terrain.`, tag: 'CLIMATE' });
     return out;
   });
 
