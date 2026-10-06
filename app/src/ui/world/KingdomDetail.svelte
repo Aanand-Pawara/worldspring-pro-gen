@@ -76,7 +76,8 @@
           {#if other}
             <button class="neighbour" type="button" onclick={() => onSelectKingdom(other.id)}>
               <span class="dot" style="background:{other.id === kingdom.id ? colour : ''}></span>
-              <span>{other.name}</span><Icon name="chevron-right" size={13} />
+              <span>{other.name}</span>
+              <Icon name="chevron-right" size={13} />
             </button>
           {/if}
         {/each}
