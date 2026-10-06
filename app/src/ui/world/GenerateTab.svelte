@@ -149,6 +149,12 @@
             </div>
           </div>
         {/if}
+        {#if g.key === 'people'}
+          <label class="toggle-row">
+            <span><b>Kingdoms & capitals</b><small>Generate realms, capitals and political borders</small></span>
+            <input type="checkbox" class="ws-switch" bind:checked={draft.p.generate_kingdoms} />
+          </label>
+        {/if}
       </div>
     </details>
   {/each}
@@ -253,6 +259,10 @@
     border-radius: 50%;
     background: var(--gold);
   }
+  .toggle-row { display:flex; align-items:center; gap:10px; padding:8px; background:var(--btn-hover); border:1px solid var(--line-faint); border-radius:var(--radius-sm); }
+  .toggle-row span { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+  .toggle-row b { font-size:12px; }
+  .toggle-row small { color:var(--ink-3); font-size:10px; line-height:1.3; }
   .foot {
     position: sticky;
     bottom: -10px;
