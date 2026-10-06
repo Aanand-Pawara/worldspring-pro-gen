@@ -466,7 +466,6 @@ export class MapView {
       if (f.kingdom_id === undefined || !['metropolis', 'city', 'town', 'village'].includes(f.kind)) continue;
       if (f.political_rank === 'capital') settlementsByKingdom.set(f.kingdom_id, f);
     }
-    const names = new Map((overlay.kingdoms ?? []).map((k) => [k.id, k.name]));
     for (const k of overlay.kingdoms ?? []) {
       const p = stats.get(k.id);
       if (!p) continue;
@@ -502,21 +501,20 @@ export class MapView {
     this.kingdomLabels.visible = true;
     const cell = this.geom.t0_cell_ft;
     const scale = cell * this.cam.ppf;
-    const minPx = 9;
     for (const child of this.kingdomLabels.children) {
       const text = child as Text & { __kingdom?: { x: number; y: number; n: number } };
       const p = text.__kingdom;
       if (!p) continue;
       const px = Math.sqrt(p.n) * scale;
-      const visible = px >= minPx;
-      text.visible = visible;
-      if (visible) {
-        const wx = p.x * cell, wy = p.y * cell;
-        const [sx, sy] = this.cam.worldToScreen(wx, wy);
-        text.position.set(sx, sy);
-        const size = Math.max(10, Math.min(22, 13 + Math.log2(Math.max(1, px / 80)) * 2));
-        text.scale.set(size / 15);
-      }
+      text.visible = true;
+      const wx = p.x * cell, wy = p.y * cell;
+      const [sx, sy] = this.cam.worldToScreen(wx, wy);
+      text.position.set(sx, sy);
+      const id = (text as Text & { __kingdomId?: number }).__kingdomId;
+      const selected = id === this.selectedKingdom;
+      const size = selected ? 18 : Math.max(10, Math.min(22, 13 + Math.log2(Math.max(1, px / 80)) * 2));
+      text.scale.set(size / 15);
+      text.alpha = selected ? 1 : 0.94;
     }
   }
 
