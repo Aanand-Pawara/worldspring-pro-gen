@@ -579,13 +579,13 @@
     if (editTab !== 'build') disarmBuild();
     if (editTab !== 'sites') disarmPlace();
     pickTool = null;
-    if (to && to !== shell.section) {
+    if (to && (tab !== undefined || to !== shell.section)) {
+      // Explicit tab navigation is always an OPEN operation. Only the section-level
+      // toggle() / flip() helpers are allowed to close an already-open panel.
       shell.collapsed = false;
       shell.card = false;
       shell.snap = 'half';
     } else if (to === shell.section) {
-      // Switching tabs inside an already-open section must reveal the panel.
-      // Otherwise a folded dock can successfully change tabs while remaining invisible.
       shell.collapsed = false;
       if (shell.phone) shell.snap = 'half';
       shell.card = false;
