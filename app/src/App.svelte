@@ -350,17 +350,25 @@
     const same = sameWorld(w, world);
     const redrawn = same && JSON.stringify(w.sketch ?? null) !== JSON.stringify(world.sketch ?? null);
     const before = overlay?.features ?? [];
+    const previousWorld = world;
     const kept = same && world.edits && world.gen_version === w.gen_version ? world.edits : (w.edits ?? (await storedEdits(w)));
-    world = kept && Object.keys(kept).length ? { ...w, edits: kept } : w;
+    const nextWorld = kept && Object.keys(kept).length ? { ...w, edits: kept } : w;
     selection = null;
-    saveUrl();
     try {
-      // (The view applies the world's edits: names, created sites, hidden labels.)
-      await view.loadWorld(world);
+      // Generate first. Only publish the new world to the UI after the renderer has a complete,
+      // valid T0/overlay. This prevents a failed worker generation from leaving the shell,
+      // URL and map pointing at different worlds.
+      await view.loadWorld(nextWorld);
+      world = nextWorld;
       overlay = view.overlay;
+      saveUrl();
       sync.open(world);
       await play.setWorld(world, view.geom!.world_hash);
       worldShown = true;
+    } catch (err) {
+      world = previousWorld;
+      saveUrl();
+      toast(`World generation failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       busy = false;
     }
