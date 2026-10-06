@@ -551,29 +551,35 @@ impl Builder<'_> {
             }
             let _ = q;
 
-            // Large, low-gradient ocean rivers get a named delta feature. The same physical
-            // eligibility used by RiverNet keeps the Almanac synchronized with what is rendered.
+            // A delta is only recorded when the mapped river actually reaches the ocean.
+            // Use discharge at the mouth, not the historical peak, because distributary flow
+            // is controlled by the water arriving at the bifurcation.
             if r.mouth == Mouth::Ocean
-                && r.order >= 1
-                && (r.peak_discharge as f64) >= super::hydro::RIVER_Q * super::hydro::DELTA_Q_FACTOR
+                && (r.q.last().copied().unwrap_or(r.peak_discharge) as f64) >= super::hydro::RIVER_Q * 3.0
                 && r.cells.len() >= super::hydro::DELTA_MIN_CELLS
             {
-                let tail = r.cells.len().min(7);
+                let tail = r.cells.len().min(6);
                 let first = r.cells[r.cells.len() - tail] as usize;
                 let last = *r.cells.last().unwrap() as usize;
                 let grade = (inp.height[first] - inp.height[last]).max(0.0) / (((tail - 1) as f64) * inp.cell_ft).max(1.0);
                 if grade <= super::hydro::DELTA_MAX_GRADE {
-                    let length_ft = (7.0 + 0.9 * crate::core::sqrt((r.peak_discharge as f64 / super::hydro::RIVER_Q).max(1.0))).clamp(7.0, 20.0) * inp.cell_ft;
-                    let spread_ft = length_ft * if (r.peak_discharge as f64) >= (super::hydro::RIVER_Q * 10.0) { 0.72 } else { 0.58 };
-                    let area_mi2 = (0.45 * length_ft * spread_ft) / (5280.0 * 5280.0);
+                    let mouth_q = r.q.last().copied().unwrap_or(r.peak_discharge) as f64;
+                    let large = mouth_q >= super::hydro::RIVER_Q * 8.0;
+                    let distributaries = if large { 4 } else { 2 };
+                    let trunk_ft = if large { 4.0 } else { 3.0 } * inp.cell_ft;
+                    let branch_ft = (5.0 + 0.55 * crate::core::sqrt(mouth_q / super::hydro::RIVER_Q)).clamp(6.0, 15.0) * inp.cell_ft;
+                    let length_ft = trunk_ft + branch_ft;
+                    let spread_ft = (2.0 * branch_ft * 0.30).max(inp.cell_ft);
+                    let area_mi2 = (0.5 * length_ft * spread_ft) / (5280.0 * 5280.0);
                     let mouth_cell = r.terminal_receiver.map(|c| c as usize).unwrap_or(last);
                     let mx = (mouth_cell % w) as f64;
                     let my = (mouth_cell / w) as f64;
-                    let id = self.push("delta", NameKind::Delta, mx, my, 0.0, spread_ft.max(length_ft), None,
-                        Some(format!("delta of {} | {} distributaries | area {:.1} sq mi | discharge index {:.0}", r.source_cell, if r.peak_discharge >= (super::hydro::RIVER_Q * 10.0) as f32 { 3 } else { 2 }, area_mi2, r.peak_discharge)));
-                    if let Some(feature) = self.out.features.iter_mut().find(|f| f.id == id) {
+                    let river_name = self.out.features.iter().find(|f| f.id == id).map(|f| f.name.clone()).unwrap_or_else(|| format!("River {}", r.source_cell));
+                    let delta_id = self.push("delta", NameKind::Delta, mx, my, 0.0, spread_ft.max(length_ft), None,
+                        Some(format!("delta of {} | {} connected distributaries | area {:.1} sq mi | mouth discharge {:.0}", river_name, distributaries, area_mi2, mouth_q)));
+                    if let Some(feature) = self.out.features.iter_mut().find(|f| f.id == delta_id) {
                         feature.area_mi2 = Some(area_mi2);
-                        feature.discharge_index = Some(r.peak_discharge as f64);
+                        feature.discharge_index = Some(mouth_q);
                         feature.length_mi = Some(length_ft / 5280.0);
                         feature.basin_id = Some(r.basin_id);
                     }

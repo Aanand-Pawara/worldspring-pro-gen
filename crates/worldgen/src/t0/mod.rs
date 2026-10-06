@@ -959,75 +959,82 @@ fn append_delta_curves(
     cell: f64,
 ) {
     let h = height.len() / w;
-    let threshold = hydro::RIVER_Q as f32;
+    let threshold = hydro::RIVER_Q;
     for (ri, river) in chains.iter().enumerate() {
-        if river.mouth != hydro::Mouth::Ocean
-            || river.order < 2
-            || (river.peak_discharge as f64) < (threshold as f64) * hydro::DELTA_Q_FACTOR
-            || river.cells.len() < hydro::DELTA_MIN_CELLS
-        {
-            continue;
-        }
+        if river.mouth != hydro::Mouth::Ocean || river.cells.len() < hydro::DELTA_MIN_CELLS { continue; }
+        let mouth_q = river.q.last().copied().unwrap_or(river.peak_discharge).max(0.0) as f64;
+        if mouth_q < threshold * 3.0 { continue; }
         let Some(receiver) = river.terminal_receiver.map(|c| c as usize) else { continue; };
         if receiver >= land.len() || land[receiver] { continue; }
-        let tail = river.cells.len().min(7);
-        if tail < 3 { continue; }
+        let tail = river.cells.len().min(6);
         let first = river.cells[river.cells.len() - tail] as usize;
         let last = *river.cells.last().unwrap() as usize;
         let grade = (height[first] - height[last]).max(0.0) / (((tail - 1) as f64) * cell).max(1.0);
         if grade > hydro::DELTA_MAX_GRADE { continue; }
-
-        let mouth = [
-            0.5 * ((last % w) as f64 + (receiver % w) as f64) * cell,
-            0.5 * ((last / w) as f64 + (receiver / w) as f64) * cell,
-        ];
+        let mouth = [0.5 * ((last % w) as f64 + (receiver % w) as f64) * cell, 0.5 * ((last / w) as f64 + (receiver / w) as f64) * cell];
         let mut dx = (receiver % w) as f64 - (last % w) as f64;
         let mut dy = (receiver / w) as f64 - (last / w) as f64;
-        let len = crate::core::sqrt(dx * dx + dy * dy).max(1e-9);
-        dx /= len;
-        dy /= len;
-        let px = -dy;
-        let py = dx;
-
-        let branch_count = if river.peak_discharge >= threshold * 10.0 { 3 } else { 2 };
-        let spread = if branch_count == 3 { 0.38 } else { 0.30 };
-        let length_cells = (7.0 + 0.9 * libm::sqrt(river.peak_discharge as f64 / threshold as f64)).clamp(7.0, 20.0);
-        let length = length_cells * cell;
-        let shares: &[f64] = if branch_count == 3 { &[0.42, 0.33, 0.25] } else { &[0.58, 0.42] };
-
-        for branch in 0..branch_count {
-            let angle = if branch_count == 3 {
-                [-spread, 0.0, spread][branch]
-            } else {
-                [-spread, spread][branch]
-            };
-            let ca = libm::cos(angle);
-            let sa = libm::sin(angle);
-            let bx = dx * ca - dy * sa;
-            let by = dx * sa + dy * ca;
-            let side = if branch_count == 3 { (branch as f64 - 1.0) * 0.16 } else { (branch as f64 - 0.5) * 0.14 };
-            let mut pts = Vec::<[f64; 2]>::with_capacity(5);
-            let mut q = Vec::<f32>::with_capacity(5);
-            let mut valid = true;
-            let share = shares[branch];
-            for k in 0..5 {
-                let t = k as f64 / 4.0;
-                let lateral = side * length * t * t;
-                let x = mouth[0] + bx * length * t + px * lateral;
-                let y = mouth[1] + by * length * t + py * lateral;
-                if x < 0.0 || y < 0.0 || x >= (w - 1) as f64 * cell || y >= (h - 1) as f64 * cell { valid = false; break; }
-                let gx = (x / cell).round().clamp(0.0, (w - 1) as f64) as usize;
-                let gy = (y / cell).round().clamp(0.0, (h - 1) as f64) as usize;
-                if land[gy * w + gx] {
-                    valid = false;
-                    break;
+        let norm = crate::core::sqrt(dx * dx + dy * dy).max(1e-9);
+        dx /= norm; dy /= norm;
+        let z = hydro.water[receiver];
+        let large = mouth_q >= threshold * 8.0;
+        let trunk_len = if large { 4.0 } else { 3.0 };
+        let branch_len = (5.0 + 0.55 * libm::sqrt(mouth_q / threshold)).clamp(6.0, 15.0);
+        let trace = |start: [f64; 2], angle: f64, length_cells: f64, curve: f64| -> Option<Vec<[f64; 2]>> {
+            let ca = libm::cos(angle); let sa = libm::sin(angle); let mut pts = Vec::with_capacity(6); let steps = 6usize;
+            for k in 0..steps {
+                let t = k as f64 / (steps - 1) as f64; let lateral = curve * length_cells * cell * t * t;
+                let px = -sa; let py = ca;
+                let x = start[0] + ca * length_cells * cell * t + px * lateral;
+                let y = start[1] + sa * length_cells * cell * t + py * lateral;
+                if x < 0.0 || y < 0.0 || x >= (w - 1) as f64 * cell || y >= (h - 1) as f64 * cell { return None; }
+                if k > 0 {
+                    let gx = (x / cell).round().clamp(0.0, (w - 1) as f64) as usize; let gy = (y / cell).round().clamp(0.0, (h - 1) as f64) as usize;
+                    if land[gy * w + gx] { return None; }
                 }
                 pts.push([x, y]);
-                q.push((river.peak_discharge as f64 * share * (1.0 - 0.55 * t)) as f32);
             }
-            if !valid || pts.len() < 3 { continue; }
-            let taper = vec![0.0, 0.15, 0.25, 0.18, 0.0];
-            curves.push(RiverCurve::new(pts, vec![hydro.water[receiver]; 5], q, taper, river_seed(world_seed, ri * 7 + branch + 1)));
+            Some(pts)
+        };
+        let choose_trace = |start: [f64; 2], angle: f64, length_cells: f64, curve: f64| -> Option<Vec<[f64; 2]>> {
+            let offsets = [0.0, -0.12, 0.12, -0.24, 0.24]; let mut best = None;
+            for offset in offsets {
+                if let Some(pts) = trace(start, angle + offset, length_cells, curve) {
+                    if best.as_ref().map_or(true, |b: &Vec<[f64; 2]>| pts.len() > b.len()) { best = Some(pts); }
+                }
+            }
+            best
+        };
+        let mut add_curve = |pts: Vec<[f64; 2]>, discharge: f64, seed: usize| {
+            if pts.len() < 3 { return; }
+            let n = pts.len();
+            let q = (0..n).map(|k| (discharge * (1.0 - 0.18 * k as f64 / (n - 1) as f64)) as f32).collect();
+            let taper = (0..n).map(|k| { let t = k as f64 / (n - 1) as f64; (crate::core::noise::smoothstep(0.0, 0.15, t) * crate::core::noise::smoothstep(0.0, 0.15, 1.0 - t)) as f32 }).collect();
+            curves.push(RiverCurve::new(pts, vec![z; n], q, taper, river_seed(world_seed, ri * 31 + seed)));
+        };
+        // One connected stem enters the receiving water first. Every distributary begins
+        // at a point on that stem, so the delta cannot render as detached fans.
+        let forward = libm::atan2(dy, dx);
+        let Some(trunk) = choose_trace(mouth, forward, trunk_len, 0.0) else { continue; };
+        let trunk_end = *trunk.last().unwrap();
+        add_curve(trunk, mouth_q, 1);
+        if !large {
+            for branch in 0..2 {
+                let share = if branch == 0 { 0.58 } else { 0.42 }; let angle = forward + if branch == 0 { -0.30 } else { 0.30 };
+                if let Some(pts) = choose_trace(trunk_end, angle, branch_len, if branch == 0 { -0.06 } else { 0.06 }) { add_curve(pts, mouth_q * share, 2 + branch); }
+            }
+        } else {
+            // Large rivers develop a second-order distributary tree: two primary arms,
+            // each splitting once. Flow is conserved at each bifurcation.
+            for primary in 0..2 {
+                let pshare = if primary == 0 { 0.56 } else { 0.44 }; let pangle = forward + if primary == 0 { -0.30 } else { 0.30 };
+                let Some(primary_pts) = choose_trace(trunk_end, pangle, branch_len * 0.55, if primary == 0 { -0.05 } else { 0.05 }) else { continue; };
+                let split = *primary_pts.last().unwrap(); add_curve(primary_pts, mouth_q * pshare, 4 + primary);
+                for side in 0..2 {
+                    let share = pshare * if side == 0 { 0.57 } else { 0.43 }; let angle = pangle + if side == 0 { -0.24 } else { 0.24 };
+                    if let Some(pts) = choose_trace(split, angle, branch_len * 0.72, if side == 0 { -0.045 } else { 0.045 }) { add_curve(pts, mouth_q * share, 8 + primary * 2 + side); }
+                }
+            }
         }
     }
 }

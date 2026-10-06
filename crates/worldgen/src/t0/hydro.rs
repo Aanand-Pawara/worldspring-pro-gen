@@ -140,7 +140,7 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
         }
     }
 
-    let (rec, _) = receivers(w, h, &fl.filled);
+    let (mut rec, _) = receivers(w, h, &fl.filled);
 
     for lake_id in 0..lakes.len() {
         lakes[lake_id].outlet = lakes[lake_id].cells.iter().copied().find(|&c| {
@@ -157,6 +157,12 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
         }
     }
 
+    // Priority-flood preserves flat filled plateaus. A strict downhill receiver can
+    // therefore strand a mapped stream on an equal-height coastal plateau. Repair only
+    // true sinks and only through other sink cells on a non-increasing filled surface.
+    repair_nearby_water_sinks(w, h, land, &lake_of, &fl.filled, &mut rec, 8);
+    let route_order = receiver_order(w, h, land, &rec);
+
     // Water balance. `raw` ignores losses (catchment supply); `q` includes them.
     let pet: Vec<f64> = clim.temp.iter().map(|&t| (350.0 + 55.0 * t as f64).max(0.0)).collect();
     let mut q = vec![0.0f64; n];
@@ -165,7 +171,7 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
         q[k] += v;
         raw[k] += v;
     }
-    for &i in fl.order.iter().rev() {
+    for &i in route_order.iter() {
         let i = i as usize;
         let p = clim.precip[i] as f64;
         let runoff = (p - 0.65 * pet[i]).max(0.0);
@@ -217,11 +223,74 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
         }
     }
 
-    let flow_accumulation = accumulate_flow(w, h, land, &lake_of, &rec, &fl.order);
+    let flow_accumulation = accumulate_flow(w, h, land, &lake_of, &rec, &route_order);
     let basin_id = assign_basin_ids(w, h, land, &lake_of, &rec);
     let rivers = extract_rivers(w, h, cell_ft, land, &lake_of, &rec, &q, &flow_accumulation, &basin_id, RIVER_Q / river_density.max(0.05), &lakes);
     debug_assert!(validate_river_network(w, h, land, &lake_of, &rec, &rivers));
     Hydro { water, flow_accumulation, basin_id, discharge: q.iter().map(|&v| v as f32).collect(), lake_of, lakes, rivers }
+}
+
+fn repair_nearby_water_sinks(w: usize, h: usize, land: &[bool], lake_of: &[u32], filled: &[f64], rec: &mut [u32], max_radius: usize) {
+    use std::collections::VecDeque;
+    let n = w * h;
+    let mut parent = vec![usize::MAX; n];
+    let mut stamp = vec![0u32; n];
+    let mut generation = 0u32;
+    for start in 0..n {
+        if !land[start] || lake_of[start] != NO_LAKE || rec[start] as usize != start { continue; }
+        generation = generation.wrapping_add(1).max(1);
+        let sx = start % w; let sy = start / w;
+        let mut queue = VecDeque::new(); queue.push_back(start);
+        stamp[start] = generation; parent[start] = start;
+        let mut target = None;
+        while let Some(cur) = queue.pop_front() {
+            let cx = cur % w; let cy = cur / w;
+            for (nb, _) in neighbors(w, h, cur) {
+                let nx = nb % w; let ny = nb / w;
+                if sx.abs_diff(nx) + sy.abs_diff(ny) > max_radius { continue; }
+                if !land[nb] || lake_of[nb] != NO_LAKE { target = Some(nb); break; }
+                if rec[nb] as usize != nb || stamp[nb] == generation { continue; }
+                if filled[nb] > filled[cur] + 1e-6 { continue; }
+                stamp[nb] = generation; parent[nb] = cur; queue.push_back(nb);
+            }
+            if target.is_some() { break; }
+        }
+        let Some(mut water) = target else { continue; };
+        let mut path = Vec::new();
+        while water != start {
+            path.push(water);
+            let p = parent[water];
+            if p == usize::MAX { path.clear(); break; }
+            water = p;
+        }
+        if path.is_empty() { continue; }
+        path.push(start); path.reverse();
+        for pair in path.windows(2) { rec[pair[0]] = pair[1] as u32; }
+    }
+}
+
+fn receiver_order(w: usize, h: usize, land: &[bool], rec: &[u32]) -> Vec<u32> {
+    let n = w * h;
+    let mut indegree = vec![0u32; n]; let mut land_count = 0usize;
+    for i in 0..n {
+        if !land[i] { continue; }
+        land_count += 1;
+        let r = rec[i] as usize;
+        if r < n && r != i && land[r] { indegree[r] = indegree[r].saturating_add(1); }
+    }
+    let mut queue = Vec::<usize>::with_capacity(land_count);
+    for i in 0..n { if land[i] && indegree[i] == 0 { queue.push(i); } }
+    let mut out = Vec::<u32>::with_capacity(land_count); let mut head = 0usize;
+    while head < queue.len() {
+        let i = queue[head]; head += 1; out.push(i as u32);
+        let r = rec[i] as usize;
+        if r < n && r != i && land[r] {
+            indegree[r] = indegree[r].saturating_sub(1);
+            if indegree[r] == 0 { queue.push(r); }
+        }
+    }
+    if out.len() != land_count { for i in 0..n { if land[i] && !out.iter().any(|&c| c as usize == i) { out.push(i as u32); } } }
+    out
 }
 
 fn accumulate_flow(w: usize, h: usize, land: &[bool], _lake_of: &[u32], rec: &[u32], order: &[u32]) -> Vec<u32> {
@@ -720,6 +789,16 @@ mod hydrology_regression_tests {
             assert_eq!(tributary.terminal_receiver, Some(join as u32));
             assert!(main.cells.iter().any(|&cell| cell as usize == join));
         }
+    }
+
+    #[test]
+    fn nearby_flat_sink_is_connected_to_nearby_ocean() {
+        let land = vec![true, true, true, false];
+        let lake = vec![NO_LAKE; 4];
+        let filled = vec![100.0, 100.0, 100.0, 0.0];
+        let mut rec = vec![0, 1, 2, 3];
+        repair_nearby_water_sinks(4, 1, &land, &lake, &filled, &mut rec, 3);
+        assert_eq!(rec, vec![1, 2, 3, 3]);
     }
 
     #[test]
