@@ -485,14 +485,29 @@ impl Builder<'_> {
         let inp = self.inp;
         let w = inp.w;
         let chains = inp.hydro.rivers.clone();
+        let (receivers, _) = super::flood::receivers(inp.w, inp.h, inp.height);
         let mut falls: Vec<(f64, f64, f64, usize)> = Vec::new();
         let mut rapids: Vec<(f64, f64, f64, usize)> = Vec::new();
         for r in chains {
             if r.cells.len() < 3 {
                 continue;
             }
-            let pts_cells: Vec<[f64; 2]> = r.cells.iter().map(|&c| [(c as usize % w) as f64, (c as usize / w) as f64]).collect();
-            let (pts, q) = chaikin(&pts_cells, &r.q, 2);
+            let mut pts_cells: Vec<[f64; 2]> = r.cells.iter().map(|&c| [(c as usize % w) as f64, (c as usize / w) as f64]).collect();
+            let mut river_q = r.q.clone();
+            if r.mouth == Mouth::Ocean || r.mouth == Mouth::Lake {
+                if let Some(&last) = r.cells.last() {
+                    let c = last as usize;
+                    let nb = receivers[c] as usize;
+                    if nb < inp.w * inp.h && (!inp.land[nb] || inp.hydro.lake_of[nb] != super::hydro::NO_LAKE) {
+                        pts_cells.push([
+                            0.5 * (pts_cells.last().unwrap()[0] + (nb % w) as f64),
+                            0.5 * (pts_cells.last().unwrap()[1] + (nb / w) as f64),
+                        ]);
+                        river_q.push(r.q.last().copied().unwrap_or(0.0));
+                    }
+                }
+            }
+            let (pts, q) = chaikin(&pts_cells, &river_q, 2);
             let named = r.cells.len() >= if r.mouth == Mouth::Confluence { 14 } else { 20 };
             if named {
                 let m = pts.len() * 11 / 20;
