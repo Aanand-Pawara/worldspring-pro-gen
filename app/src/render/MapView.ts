@@ -861,12 +861,13 @@ export class MapView {
     this.app.stage.addChild(this.tiles.container);
     this.app.stage.addChild(this.kingdomFill);
     this.app.stage.addChild(this.kingdomLayer);
-    this.app.stage.addChild(this.kingdomLabels);
     this.app.stage.addChild(this.selectedRiverLayer);
     this.app.stage.addChild(this.battle.container);
     this.drawKingdomOverlay();
     this.app.stage.addChild(this.playUnder);
     this.app.stage.addChild(this.labels.container);
+    // Kingdom names are an overlay annotation, so keep them above terrain and feature labels.
+    this.app.stage.addChild(this.kingdomLabels);
     this.app.stage.addChild(this.playOver);
     this.app.stage.addChild(this.toolLayer);
     this.progress = null;
