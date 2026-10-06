@@ -327,7 +327,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 population,
                 coastal: is_coast,
                 river: on_river[k],
-                capital,
+                capital: false,
                 kingdom_id: 0,
                 seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32,
                 culture: 0,

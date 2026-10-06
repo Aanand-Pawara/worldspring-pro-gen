@@ -756,6 +756,7 @@ impl T0 {
                 coastal: flags & 1 != 0,
                 river: flags & 2 != 0,
                 capital: flags & 4 != 0,
+                kingdom_id: 0,
                 seed,
                 culture,
                 pin: None,

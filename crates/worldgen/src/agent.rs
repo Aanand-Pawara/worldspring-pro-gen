@@ -58,6 +58,9 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
             max_depth_ft: None,
             inlet_count: None,
             has_outlet: None,
+            kingdom_id: None,
+            kingdom_name: None,
+            political_rank: None,
         });
     }
     for f in &mut out {
