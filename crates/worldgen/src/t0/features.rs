@@ -494,7 +494,20 @@ impl Builder<'_> {
             }
             let mut pts_cells: Vec<[f64; 2]> = r.cells.iter().map(|&c| [(c as usize % w) as f64, (c as usize / w) as f64]).collect();
             let mut river_q = r.q.clone();
-            if r.mouth == Mouth::Ocean || r.mouth == Mouth::Lake {
+            if r.mouth == Mouth::Confluence {
+                if let Some(parent) = r.into {
+                    if let Some(&last) = r.cells.last() {
+                        let c = last as usize;
+                        let nb = receivers[c] as usize;
+                        if nb < inp.w * inp.h
+                            && chains[parent].cells.iter().any(|&cell_id| cell_id as usize == nb)
+                        {
+                            pts_cells.push([(nb % w) as f64, (nb / w) as f64]);
+                            river_q.push(r.q.last().copied().unwrap_or(0.0));
+                        }
+                    }
+                }
+            } else if r.mouth == Mouth::Ocean || r.mouth == Mouth::Lake {
                 if let Some(&last) = r.cells.last() {
                     let c = last as usize;
                     let nb = receivers[c] as usize;
