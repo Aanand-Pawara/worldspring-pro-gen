@@ -20,6 +20,7 @@
   const RANKING_MODES = [{ key: 'settlements', label: 'Settlements' }, { key: 'terrain', label: 'Terrain' }, { key: 'water', label: 'Water' }, { key: 'regions', label: 'Biomes' }];
 
   // The view consumes one model boundary. Add new Almanac data in model.ts, not here.
+  // Navigation stays component-driven so new Almanac views do not duplicate markup.
   const model = $derived(buildAlmanacModel(world, overlay));
   const features = $derived(model.features), settlements = $derived(model.settlements), peaks = $derived(model.peaks), rivers = $derived(model.rivers), lakes = $derived(model.lakes), waterfalls = $derived(model.waterfalls), landmasses = $derived(model.landmasses), ranges = $derived(model.ranges), passes = $derived(model.passes), volcanoes = $derived(model.volcanoes), regions = $derived(model.regions);
   const cities = $derived(model.cities), towns = $derived(model.towns), villages = $derived(model.villages), capitals = $derived(model.capitals), kingdoms = $derived(model.kingdoms), totalPopulation = $derived(model.totalPopulation), cityPopulationShare = $derived(model.cityPopulationShare), capitalPopulationShare = $derived(model.capitalPopulationShare), namedKinds = $derived(model.namedKinds);
