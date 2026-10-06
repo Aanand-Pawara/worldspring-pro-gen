@@ -274,7 +274,7 @@ export class MapView {
   private drawKingdomOverlay() {
     const g = this.kingdomLayer;
     const overlay = this.overlay;
-    if (!this.kingdomOverlayOn || !this.geom || !overlay?.kingdom_cells?.length) {
+    if (!this.kingdomOverlayOn || !this.geom || (!overlay?.kingdom_cells?.length && !overlay?.kingdom_borders?.length)) {
       g.visible = false;
       return;
     }
@@ -290,7 +290,7 @@ export class MapView {
       const w = this.geom.t0_w;
       const h = this.geom.t0_h;
       const runs = new Map<number, { x: number; y: number; n: number }[]>();
-      for (let y = 0; y < h; y++) {
+      if (overlay.kingdom_cells?.length) for (let y = 0; y < h; y++) {
         let x = 0;
         while (x < w) {
           const id = overlay.kingdom_cells[y * w + x] ?? 65535;
@@ -791,6 +791,7 @@ export class MapView {
     this.app.stage.addChild(this.kingdomLayer);
     this.app.stage.addChild(this.selectedRiverLayer);
     this.app.stage.addChild(this.battle.container);
+    this.drawKingdomOverlay();
     this.app.stage.addChild(this.playUnder);
     this.app.stage.addChild(this.labels.container);
     this.app.stage.addChild(this.playOver);
