@@ -60,6 +60,9 @@ pub struct Feature {
     pub inlet_count: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_outlet: Option<bool>,
+    pub kingdom_id: Option<u16>,
+    pub kingdom_name: Option<String>,
+    pub political_rank: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -86,6 +89,7 @@ pub struct Inputs<'a> {
     pub volcanoes: &'a [Volcano],
     pub settlements: &'a [Settlement],
     pub pois: &'a [Poi],
+    pub politics: &'a super::politics::Politics,
 }
 
 struct Builder<'a> {
@@ -164,7 +168,7 @@ impl Builder<'_> {
             id.push('b');
         }
         let c = self.inp.cell_ft;
-        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, river_path: None, stream_order: None, drainage_area_mi2: None, discharge_index: None, tributary_count: None, length_mi: None, basin_id: None, river_mouth: None, source_lake_id: None, mouth_lake_id: None, area_mi2: None, max_depth_ft: None, inlet_count: None, has_outlet: None });
+        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, river_path: None, stream_order: None, drainage_area_mi2: None, discharge_index: None, tributary_count: None, length_mi: None, basin_id: None, river_mouth: None, source_lake_id: None, mouth_lake_id: None, area_mi2: None, max_depth_ft: None, inlet_count: None, has_outlet: None, kingdom_id: None, kingdom_name: None, political_rank: None });
         id
     }
 
@@ -375,7 +379,10 @@ impl Builder<'_> {
                 Tier::Town => 12.0,
                 Tier::Village => 5.0,
             } * 5280.0;
+            let kingdom = inp.politics.kingdoms.get(s.kingdom_id as usize);
+            let rank = if s.capital { "capital" } else { match s.tier { Tier::Metropolis | Tier::City => "city", Tier::Town => "town", Tier::Village => "village" } };
             let mut detail = format!("{} {}, pop. {}", s.kind.name(), s.tier.name(), fmt_thousands(s.population as f64));
+            if let Some(k) = kingdom { detail.push_str(&format!(", {} of {}", rank, k.name)); }
             if s.capital {
                 detail.push_str(", capital");
             }
@@ -385,6 +392,7 @@ impl Builder<'_> {
             self.push(kind, NameKind::Settlement, cx, cy, 0.0, extent, Some(elev.round()), Some(detail));
             // A pinned settlement keeps the name drawn with it.
             let pinned = s.pin.and_then(|i| inp.world.file.sketch.strokes.get(i as usize)).and_then(|st| st.name.as_deref()).map(str::trim).filter(|n| !n.is_empty());
+            if let Some(f) = self.out.features.last_mut() { f.kingdom_id=Some(s.kingdom_id); f.kingdom_name=kingdom.map(|k|k.name.clone()); f.political_rank=Some(rank); }
             if let Some(name) = pinned {
                 self.out.features.last_mut().expect("just pushed").name = name.to_string();
             }

@@ -42,6 +42,16 @@ fn drainage_basins_are_stable_and_complete() {
 }
 
 #[test]
+fn kingdoms_have_one_capital_and_cover_settlements() {
+    for seed in [3u32, 99] {
+        let world=World::from_json(&world_json(seed)).unwrap(); let t0=worldgen::t0::T0::generate(&world); let e=t0.extra.as_ref().unwrap(); let p=&e.politics;
+        assert!(!p.kingdoms.is_empty(), "seed {seed}: no kingdoms");
+        for k in &p.kingdoms { assert_eq!(e.settlements[k.capital].kingdom_id,k.id); assert!(e.settlements[k.capital].capital); assert_eq!(e.settlements.iter().filter(|s|s.kingdom_id==k.id&&s.capital).count(),1); }
+        for s in &e.settlements { assert!((s.kingdom_id as usize)<p.kingdoms.len()); }
+    }
+}
+
+#[test]
 fn rivers_flow_downhill() {
     for seed in [3u32, 99] {
         let world = World::from_json(&world_json(seed)).unwrap();

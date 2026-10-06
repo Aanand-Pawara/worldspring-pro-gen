@@ -88,6 +88,7 @@ pub enum NameKind {
     Glacier,
     Plateau,
     Valley,
+    Kingdom,
     Settlement,
     Ruin,
     Tower,
@@ -227,6 +228,9 @@ impl Namer {
             (Plateau, _) => format!("{w} Plateau"),
             (Valley, 0 | 1) => format!("The {adj} Valley"),
             (Valley, _) => format!("{w} Valley"),
+            (Kingdom, 0) => format!("The {w} Kingdom"),
+            (Kingdom, 1) => format!("The {adj} Kingdom"),
+            (Kingdom, _) => format!("Kingdom of {w}"),
         }
     }
 }

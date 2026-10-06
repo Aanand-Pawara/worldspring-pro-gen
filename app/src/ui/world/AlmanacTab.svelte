@@ -38,7 +38,8 @@
   const cities = $derived(settlements.filter((f) => f.kind === 'city' || f.kind === 'metropolis'));
   const towns = $derived(settlements.filter((f) => f.kind === 'town'));
   const villages = $derived(settlements.filter((f) => f.kind === 'village'));
-  const capitals = $derived(settlements.filter((f) => (f.detail ?? '').includes(', capital')));
+  const capitals = $derived(settlements.filter((f) => f.political_rank === 'capital' || (f.detail ?? '').includes(', capital')));
+  const kingdoms = $derived.by(() => { const m=new Map<number,{id:number;name:string;capital:Feature|null;population:number;cities:number;towns:number;villages:number}>(); for(const f of settlements){if(f.kingdom_id===undefined)continue;const e=m.get(f.kingdom_id)??{id:f.kingdom_id,name:f.kingdom_name??`Kingdom ${f.kingdom_id+1}`,capital:null,population:0,cities:0,towns:0,villages:0};e.population+=population(f);if(f.political_rank==='capital')e.capital=f;if(f.kind==='metropolis'||f.kind==='city')e.cities++;else if(f.kind==='town')e.towns++;else e.villages++;m.set(f.kingdom_id,e);}return [...m.values()].sort((a,b)=>b.population-a.population||a.name.localeCompare(b.name)); });
   const cityPopulation = $derived(cities.reduce((n, f) => n + population(f), 0));
   const capitalPopulation = $derived(capitals.reduce((n, f) => n + population(f), 0));
   const cityPopulationShare = $derived(totalPopulation ? Math.round((cityPopulation / totalPopulation) * 100) : 0);
@@ -187,6 +188,7 @@
       <div><strong>{fmt(totalPopulation)}</strong><span>estimated population</span></div>
       <div><strong>{fmt(settlements.length)}</strong><span>settlements</span></div>
       <div><strong>{fmt(features.length)}</strong><span>named features</span></div>
+      <div><strong>{fmt(kingdoms.length)}</strong><span>kingdoms</span></div>
       <div><strong>{fmt(regions.length)}</strong><span>named biome regions</span></div>
     </div>
 
@@ -197,6 +199,7 @@
         <div><span>Cities</span><b>{fmt(cities.length)}</b></div>
         <div><span>Towns</span><b>{fmt(towns.length)}</b></div>
         <div><span>Villages</span><b>{fmt(villages.length)}</b></div>
+        <div><span>Kingdoms</span><b>{fmt(kingdoms.length)}</b></div>
         <div><span>Capitals</span><b>{fmt(capitals.length)}</b></div>
         <div><span>Urban population</span><b>{fmt(cityPopulationShare)}%</b></div>
         <div><span>Capital population</span><b>{fmt(capitalPopulationShare)}%</b></div>
@@ -212,6 +215,11 @@
         <div><span>Flow-through lakes</span><b>{fmt(flowThroughLakes.length)}</b></div>
         <div><span>Highest stream order</span><b>{fmt(highestOrderRiver?.stream_order ?? 0)}</b></div>
       </div>
+    </section>
+
+    <section>
+      <h3>Kingdoms</h3>
+      <div class="profile">{#each kingdoms as k (k.id)}<div><span>{k.name}</span><b>{k.capital?.name ?? 'No capital'} · {fmt(k.population)} people</b><small>{fmt(k.cities)} cities · {fmt(k.towns)} towns · {fmt(k.villages)} villages</small></div>{:else}<div class="muted">No political realms generated.</div>{/each}</div>
     </section>
 
     <section>

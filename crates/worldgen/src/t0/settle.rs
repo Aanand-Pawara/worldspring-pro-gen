@@ -70,6 +70,7 @@ pub struct Settlement {
     pub coastal: bool,
     pub river: bool,
     pub capital: bool,
+    pub kingdom_id: u16,
     /// Per-settlement seed for its layout.
     pub seed: u64,
     /// Naming culture (set with the gazetteer).
@@ -272,7 +273,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         cands.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
         let spacing = spacing_mi * 5280.0 / cell;
         // A settlement of this tier at cell `k`, standing at (x, y) ft.
-        let make = |k: usize, rng: &mut Pcg32, x: f64, y: f64, capital: bool, pin: Option<u32>| {
+        let make = |k: usize, rng: &mut Pcg32, x: f64, y: f64, pin: Option<u32>| {
             let (cx, cy) = ((k % w) as f64, (k / w) as f64);
             // Population is a deterministic estimate of settlement capacity, not just a
             // random number inside a tier. Fertility, water, terrain, altitude, roads and
@@ -327,6 +328,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 coastal: is_coast,
                 river: on_river[k],
                 capital,
+                kingdom_id: 0,
                 seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32,
                 culture: 0,
                 pin,
@@ -336,8 +338,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         let mut placed = 0;
         for pin in inp.pins.iter().filter(|p| p.tier == tier) {
             let mut prng = Pcg32::new(crate::core::rng::hash2(world.stream("t0.pin"), pin.stroke as i64, 0), 7);
-            let capital = tier == Tier::Metropolis && !out.iter().any(|s| s.capital);
-            out.push(make(pin.cell, &mut prng, pin.x, pin.y, capital, Some(pin.stroke as u32)));
+            out.push(make(pin.cell, &mut prng, pin.x, pin.y, Some(pin.stroke as u32)));
             placed += 1;
         }
         if count == 0 {
@@ -357,8 +358,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             if !ok {
                 continue;
             }
-            let capital = tier == Tier::Metropolis && !out.iter().any(|s| s.capital);
-            out.push(make(k, &mut rng, cx * cell, cy * cell, capital, None));
+            out.push(make(k, &mut rng, cx * cell, cy * cell, None));
             placed += 1;
         }
     }

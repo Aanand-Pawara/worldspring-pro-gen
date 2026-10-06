@@ -430,6 +430,9 @@ export interface Feature {
   max_depth_ft?: number;
   inlet_count?: number;
   has_outlet?: boolean;
+  kingdom_id?: number;
+  kingdom_name?: string;
+  political_rank?: 'capital' | 'city' | 'town' | 'village';
 }
 
 export interface Overlay {

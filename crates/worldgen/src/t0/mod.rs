@@ -12,6 +12,7 @@ pub mod flood;
 pub mod hydro;
 pub mod names;
 pub mod plates;
+pub mod politics;
 pub mod roads;
 pub mod settle;
 pub mod sketch;
@@ -98,6 +99,7 @@ pub struct T0Extra {
     pub settlements: Vec<settle::Settlement>,
     pub pois: Vec<settle::Poi>,
     pub crossings: Vec<roads::Crossing>,
+    pub politics: politics::Politics,
 }
 
 impl T0 {
@@ -288,6 +290,7 @@ impl T0 {
             best.map(|(_, p, hw)| (p, hw))
         };
         settle::snap_to_water(&mut settlements, cell, &wet, &nearest_river);
+        let politics = politics::assign(world, w, h, &land, &mut settlements);
         let vents_at: Vec<(f64, f64, f64)> = volcanoes.iter().map(|v| (v.cx, v.cy, v.radius_ft)).collect();
         let mut pois = settle::place_pois(&sinp, &settlements, &vents_at);
         // Towns sit beside rivers, not in them (the fine channel meanders through T0 cells).
@@ -342,6 +345,7 @@ impl T0 {
             volcanoes: &volcanoes,
             settlements: &settlements,
             pois: &pois,
+            politics: &politics,
         });
         overlay.conflicts = conflicts;
         progress("done", 1.0);
@@ -375,7 +379,7 @@ impl T0 {
         t0.settlements = settlements.clone();
         t0.base_pois = pois.len();
         t0.pois = pois.clone();
-        t0.extra = Some(T0Extra { temp: clim.temp, precip: clim.precip, hydro, volcanoes, overlay, settlements, pois, crossings: network.crossings });
+        t0.extra = Some(T0Extra { temp: clim.temp, precip: clim.precip, hydro, volcanoes, overlay, settlements, pois, crossings: network.crossings, politics });
         t0
     }
 
