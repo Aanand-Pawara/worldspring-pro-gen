@@ -933,6 +933,8 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
                 // already contains the accumulated downstream discharge and widens after it.
                 q.push(last_q.max(q.iter().copied().fold(0.0, f32::max)));
             }
+            let mut taper = tapers[ri].clone();
+            while taper.len() < pts.len() { taper.push(0.0); }
             RiverCurve::new(pts, z, q, taper, river_seed(world.seed, ri))
         })
         .collect();
