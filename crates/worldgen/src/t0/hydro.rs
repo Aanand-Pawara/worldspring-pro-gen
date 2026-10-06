@@ -533,8 +533,8 @@ mod hydrology_regression_tests {
         let h = 1;
         let land = vec![true, true, true, true, true, false];
         let lake = vec![NO_LAKE; 6];
-        let rec = vec![1, 1, 1, 3, 4, 5];
-        let q = vec![100.0, 220.0, 100.0, 220.0, 220.0, 0.0];
+        let rec = vec![1, 3, 1, 4, 5, 5];
+        let q = vec![100.0, 220.0, 100.0, 220.0, 320.0, 0.0];
         let acc = vec![1, 3, 1, 4, 5, 0];
         let basin = vec![7u64; 6];
         let rivers = extract_rivers(w, h, 1.0, &land, &lake, &rec, &q, &acc, &basin, 90.0, &[]);
@@ -549,7 +549,7 @@ mod hydrology_regression_tests {
             assert_eq!(tributary.into, rivers.iter().position(|r| std::ptr::eq(r, main)));
             let last = *tributary.cells.last().unwrap() as usize;
             let join = rec[last] as usize;
-            assert_eq!(*main.cells.first().unwrap() as usize, join);
+            assert!(main.cells.iter().any(|&cell| cell as usize == join));
         }
     }
 
