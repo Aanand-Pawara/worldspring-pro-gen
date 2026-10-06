@@ -244,10 +244,23 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
         }
     }
     // A discharge threshold decides where a mapped river is born, not where it is
-    // allowed to die. Once a channel is established, follow the receiver all the way to
-    // the next water body. This prevents dry-country transmission loss from producing
-    // visually orphaned rivers that simply stop on otherwise draining terrain.
-    let is_seed = |i: usize| land[i] && lake_of[i] == NO_LAKE && (q[i] >= threshold || (lake_feed[i] && q[i] >= threshold * 0.20));
+    // allowed to die. A source is the first land cell on a flow path that crosses the
+    // mapping threshold. Without this upstream check, every downstream high-Q cell can
+    // become a second "source", producing artificial river births along one channel.
+    let mut upstream_above_threshold = vec![false; n];
+    for i in 0..n {
+        if !land[i] || lake_of[i] != NO_LAKE || q[i] < threshold { continue; }
+        let r = rec[i] as usize;
+        if r < n && r != i && land[r] && lake_of[r] == NO_LAKE {
+            upstream_above_threshold[r] = true;
+        }
+    }
+    let is_seed = |i: usize| {
+        land[i]
+            && lake_of[i] == NO_LAKE
+            && ((lake_feed[i] && q[i] >= threshold * 0.20)
+                || (q[i] >= threshold && !upstream_above_threshold[i]))
+    };
     let mut channel = vec![false; n];
     let seeds: Vec<usize> = (0..n).filter(|&i| is_seed(i)).collect();
     for &start in &seeds {
@@ -397,8 +410,8 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
         if matches!(chain.mouth, Mouth::Ocean | Mouth::Lake | Mouth::Confluence) {
             if let Some(&last) = chain.cells.last() {
                 let c = last as usize;
-                let r = rec[c] as usize;
-                if r < n && (!land[r] || lake_of[r] != NO_LAKE) {
+                if let Some(r) = chain.terminal_receiver {
+                    let r = r as usize;
                     let dx = (c % w) as f64 - (r % w) as f64;
                     let dy = (c / w) as f64 - (r / w) as f64;
                     let fraction = if chain.mouth == Mouth::Confluence { 1.0 } else { 0.5 };
@@ -523,6 +536,22 @@ mod tests {
         assert_eq!(rivers[0].mouth_lake, Some(0));
         assert!(rivers[0].length_ft > 0.0);
         assert_eq!(rivers[0].basin_id, 0x1_0000_0000);
+    }
+
+    #[test]
+    fn river_source_is_the_threshold_crossing_not_every_high_q_cell() {
+        let land = vec![true, true, true, true, false];
+        let lake = vec![NO_LAKE; 5];
+        let rec = vec![1, 2, 3, 4, 4];
+        let q = vec![20.0, 60.0, 90.0, 180.0, 0.0];
+        let acc = vec![1, 2, 3, 4, 0];
+        let basin = vec![11u64; 5];
+        let rivers = extract_rivers(5, 1, 1.0, &land, &lake, &rec, &q, &acc, &basin, 90.0, &[]);
+        assert_eq!(rivers.len(), 1);
+        assert_eq!(rivers[0].source_cell, 2);
+        assert_eq!(rivers[0].cells, vec![2, 3]);
+        assert_eq!(rivers[0].terminal_receiver, Some(4));
+        assert_eq!(rivers[0].mouth, Mouth::Ocean);
     }
 
     #[test]
