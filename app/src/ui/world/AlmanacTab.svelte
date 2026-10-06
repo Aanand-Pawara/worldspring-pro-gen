@@ -23,18 +23,45 @@
   // Paint the Almanac shell first. Generated overlays can be large, so never build the model
   // during the same render that handles navigation.
   let model = $state<AlmanacModel | null>(null);
+  let modelError = $state<string | null>(null);
   let modelRequest = 0;
+  let lastWorld: WorldFile | null = null;
+  let lastOverlay: Overlay | null = null;
+  let lastMode: typeof mode | null = null;
+
   $effect(() => {
     const requestWorld = world;
     const requestOverlay = overlay;
     const requestMode = mode;
+
+    // Props can be observed again when the parent paints. Do not tear down a valid
+    // computation just because the Almanac itself updated.
+    if (requestWorld === lastWorld && requestOverlay === lastOverlay && requestMode === lastMode && model) return;
+
+    lastWorld = requestWorld;
+    lastOverlay = requestOverlay;
+    lastMode = requestMode;
+
     const id = ++modelRequest;
     model = null;
-    const frame = requestAnimationFrame(() => {
+    modelError = null;
+
+    const timer = window.setTimeout(() => {
       if (id !== modelRequest) return;
-      model = buildAlmanacModel(requestWorld, requestOverlay, requestMode);
-    });
-    return () => cancelAnimationFrame(frame);
+      try {
+        const started = performance.now();
+        const next = buildAlmanacModel(requestWorld, requestOverlay, requestMode);
+        if (id !== modelRequest) return;
+        model = next;
+        if (import.meta.env.DEV) console.debug('[Almanac] model built', Math.round(performance.now() - started), 'ms', next.features.length, 'features');
+      } catch (error) {
+        if (id !== modelRequest) return;
+        modelError = error instanceof Error ? error.message : String(error);
+        console.error('[Almanac] failed to build model', error);
+      }
+    }, 0);
+
+    return () => window.clearTimeout(timer);
   });
   const features = $derived(model?.features ?? []), settlements = $derived(model?.settlements ?? []), peaks = $derived(model?.peaks ?? []), rivers = $derived(model?.rivers ?? []), lakes = $derived(model?.lakes ?? []), waterfalls = $derived(model?.waterfalls ?? []), landmasses = $derived(model?.landmasses ?? []), ranges = $derived(model?.ranges ?? []), passes = $derived(model?.passes ?? []), volcanoes = $derived(model?.volcanoes ?? []), regions = $derived(model?.regions ?? []);
   const cities = $derived(model?.cities ?? []), towns = $derived(model?.towns ?? []), villages = $derived(model?.villages ?? []), capitals = $derived(model?.capitals ?? []), kingdoms = $derived(model?.kingdoms ?? []), totalPopulation = $derived(model?.totalPopulation ?? 0), cityPopulationShare = $derived(model?.cityPopulationShare ?? 0), capitalPopulationShare = $derived(model?.capitalPopulationShare ?? 0), namedKinds = $derived(model?.namedKinds ?? 0);
@@ -75,6 +102,8 @@
 
   {#if !overlay}
     <div class="empty"><Icon name="help" size={18} /><span>Generate a world first. The almanac reads the generated overlay directly.</span></div>
+  {:else if modelError}
+    <div class="empty loading"><Icon name="warning" size={18} /><span>Could not read the generated world: {modelError}</span></div>
   {:else if !model}
     <div class="empty loading"><span class="spinner" aria-hidden="true"></span><span>Reading the generated world…</span></div>
   {:else if mode === 'overview'}
