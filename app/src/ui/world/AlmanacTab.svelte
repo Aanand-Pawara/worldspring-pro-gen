@@ -3,7 +3,7 @@
   import Icon from '../Icon.svelte';
   import AlmanacTabs from './AlmanacTabs.svelte';
   import FactPanel from './FactPanel.svelte';
-  import { buildAlmanacModel, fmt, fmtMiles, population, miles, areaSqMi, drop } from './almanac/model';
+  import { buildAlmanacModel, fmt, fmtMiles, population, miles, areaSqMi, drop, type AlmanacModel } from './almanac/model';
 
   interface Props {
     world: WorldFile;
@@ -23,12 +23,12 @@
   // The view consumes one model boundary. Add new Almanac data in model.ts, not here.
   // Navigation stays component-driven so new Almanac views do not duplicate markup.
   const model = $derived(buildAlmanacModel(world, overlay, mode));
-  const features = $derived(model.features), settlements = $derived(model.settlements), peaks = $derived(model.peaks), rivers = $derived(model.rivers), lakes = $derived(model.lakes), waterfalls = $derived(model.waterfalls), landmasses = $derived(model.landmasses), ranges = $derived(model.ranges), passes = $derived(model.passes), volcanoes = $derived(model.volcanoes), regions = $derived(model.regions);
-  const cities = $derived(model.cities), towns = $derived(model.towns), villages = $derived(model.villages), capitals = $derived(model.capitals), kingdoms = $derived(model.kingdoms), totalPopulation = $derived(model.totalPopulation), cityPopulationShare = $derived(model.cityPopulationShare), capitalPopulationShare = $derived(model.capitalPopulationShare), namedKinds = $derived(model.namedKinds);
-  const largestSettlement = $derived(model.largestSettlement), highestPeak = $derived(model.highestPeak), longestRiver = $derived(model.longestRiver), largestRiverBasin = $derived(model.largestRiverBasin), largestLake = $derived(model.largestLake), largestLandmass = $derived(model.largestLandmass), highestWaterfall = $derived(model.highestWaterfall), largestRange = $derived(model.largestRange);
-  const oceanRivers = $derived(model.oceanRivers), inlandLakeRivers = $derived(model.inlandLakeRivers), dryRivers = $derived(model.dryRivers), lakeFedRivers = $derived(model.lakeFedRivers), terminalLakes = $derived(model.terminalLakes), flowThroughLakes = $derived(model.flowThroughLakes), totalRiverMiles = $derived(model.totalRiverMiles), highestOrderRiver = $derived(model.highestOrderRiver);
-  const activeVolcanoes = $derived(model.activeVolcanoes), dormantVolcanoes = $derived(model.dormantVolcanoes), extinctVolcanoes = $derived(model.extinctVolcanoes), regionCounts = $derived(model.regionCounts), leadingRegion = $derived(model.leadingRegion);
-  const settlementRank = $derived(model.settlementRank), peakRank = $derived(model.peakRank), riverRank = $derived(model.riverRank), lakeRank = $derived(model.lakeRank), regionRank = $derived(model.regionRank), facts = $derived(model.facts);
+  const features = $derived(model?.features ?? []), settlements = $derived(model?.settlements ?? []), peaks = $derived(model?.peaks ?? []), rivers = $derived(model?.rivers ?? []), lakes = $derived(model?.lakes ?? []), waterfalls = $derived(model?.waterfalls ?? []), landmasses = $derived(model?.landmasses ?? []), ranges = $derived(model?.ranges ?? []), passes = $derived(model?.passes ?? []), volcanoes = $derived(model?.volcanoes ?? []), regions = $derived(model?.regions ?? []);
+  const cities = $derived(model?.cities ?? []), towns = $derived(model?.towns ?? []), villages = $derived(model?.villages ?? []), capitals = $derived(model?.capitals ?? []), kingdoms = $derived(model?.kingdoms ?? []), totalPopulation = $derived(model?.totalPopulation ?? 0), cityPopulationShare = $derived(model?.cityPopulationShare ?? 0), capitalPopulationShare = $derived(model?.capitalPopulationShare ?? 0), namedKinds = $derived(model?.namedKinds ?? 0);
+  const largestSettlement = $derived(model?.largestSettlement ?? null), highestPeak = $derived(model?.highestPeak ?? null), longestRiver = $derived(model?.longestRiver ?? null), largestRiverBasin = $derived(model?.largestRiverBasin ?? null), largestLake = $derived(model?.largestLake ?? null), largestLandmass = $derived(model?.largestLandmass ?? null), highestWaterfall = $derived(model?.highestWaterfall ?? null), largestRange = $derived(model?.largestRange ?? null);
+  const oceanRivers = $derived(model?.oceanRivers ?? []), inlandLakeRivers = $derived(model?.inlandLakeRivers ?? []), dryRivers = $derived(model?.dryRivers ?? []), lakeFedRivers = $derived(model?.lakeFedRivers ?? []), terminalLakes = $derived(model?.terminalLakes ?? []), flowThroughLakes = $derived(model?.flowThroughLakes ?? []), totalRiverMiles = $derived(model?.totalRiverMiles ?? 0), highestOrderRiver = $derived(model?.highestOrderRiver ?? null);
+  const activeVolcanoes = $derived(model?.activeVolcanoes ?? []), dormantVolcanoes = $derived(model?.dormantVolcanoes ?? []), extinctVolcanoes = $derived(model?.extinctVolcanoes ?? []), regionCounts = $derived(model?.regionCounts ?? []), leadingRegion = $derived(model?.leadingRegion ?? null);
+  const settlementRank = $derived(model?.settlementRank ?? []), peakRank = $derived(model?.peakRank ?? []), riverRank = $derived(model?.riverRank ?? []), lakeRank = $derived(model?.lakeRank ?? []), regionRank = $derived(model?.regionRank ?? []), facts = $derived(model?.facts ?? []);
 
   function randomFact() {
     if (facts.length < 2) return;
@@ -369,6 +369,6 @@
   .kingdom-main { min-width:0; display:flex; flex-direction:column; gap:2px; }
   .kingdom-main strong { font-size:12px; }
   .kingdom-main small { color:var(--ink-3); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .empty { display:flex; gap:8px; align-items:center; color:var(--ink-3); padding:12px 4px; font-size:12px; }
+  .empty { display:flex; gap:8px; align-items:center; color:var(--ink-3); padding:12px 4px; font-size:12px; }\n  .loading { min-height:90px; justify-content:center; }\n  .spinner { width:14px; height:14px; border:2px solid var(--line-soft); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; }\n  @keyframes spin { to { transform:rotate(360deg); } }
   .muted { color:var(--ink-3); font-size:11px; padding:4px; }
 </style>
