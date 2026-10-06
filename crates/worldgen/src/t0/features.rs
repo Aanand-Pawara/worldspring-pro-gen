@@ -555,7 +555,7 @@ impl Builder<'_> {
             // eligibility used by RiverNet keeps the Almanac synchronized with what is rendered.
             if r.mouth == Mouth::Ocean
                 && r.order >= 1
-                && r.peak_discharge >= super::hydro::RIVER_Q * super::hydro::DELTA_Q_FACTOR
+                && (r.peak_discharge as f64) >= super::hydro::RIVER_Q * super::hydro::DELTA_Q_FACTOR
                 && r.cells.len() >= super::hydro::DELTA_MIN_CELLS
             {
                 let tail = r.cells.len().min(7);
@@ -564,7 +564,7 @@ impl Builder<'_> {
                 let grade = (inp.height[first] - inp.height[last]).max(0.0) / (((tail - 1) as f64) * inp.cell_ft).max(1.0);
                 if grade <= super::hydro::DELTA_MAX_GRADE {
                     let length_ft = (7.0 + 0.9 * crate::core::sqrt((r.peak_discharge as f64 / super::hydro::RIVER_Q).max(1.0))).clamp(7.0, 20.0) * inp.cell_ft;
-                    let spread_ft = length_ft * if r.peak_discharge >= super::hydro::RIVER_Q * 10.0 { 0.72 } else { 0.58 };
+                    let spread_ft = length_ft * if (r.peak_discharge as f64) >= super::hydro::RIVER_Q * 10.0 { 0.72 } else { 0.58 };
                     let area_mi2 = (0.45 * length_ft * spread_ft) / (5280.0 * 5280.0);
                     let mouth_cell = r.terminal_receiver.map(|c| c as usize).unwrap_or(last);
                     let mx = (mouth_cell % w) as f64;

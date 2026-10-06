@@ -963,7 +963,7 @@ fn append_delta_curves(
     for (ri, river) in chains.iter().enumerate() {
         if river.mouth != hydro::Mouth::Ocean
             || river.order < 2
-            || river.peak_discharge < threshold * hydro::DELTA_Q_FACTOR
+            || (river.peak_discharge as f64) < (threshold as f64) * hydro::DELTA_Q_FACTOR
             || river.cells.len() < hydro::DELTA_MIN_CELLS
         {
             continue;
@@ -1008,16 +1008,18 @@ fn append_delta_curves(
             let side = if branch_count == 3 { (branch as f64 - 1.0) * 0.16 } else { (branch as f64 - 0.5) * 0.14 };
             let mut pts = Vec::<[f64; 2]>::with_capacity(5);
             let mut q = Vec::<f32>::with_capacity(5);
+            let mut valid = true;
             let share = shares[branch];
             for k in 0..5 {
                 let t = k as f64 / 4.0;
                 let lateral = side * length * t * t;
                 let x = mouth[0] + bx * length * t + px * lateral;
                 let y = mouth[1] + by * length * t + py * lateral;
-                if x < 0.0 || y < 0.0 || x >= (w - 1) as f64 * cell || y >= (h - 1) as f64 * cell { break; }
+                if x < 0.0 || y < 0.0 || x >= (w - 1) as f64 * cell || y >= (h - 1) as f64 * cell { valid = false; break; }
                 let gx = (x / cell).round().clamp(0.0, (w - 1) as f64) as usize;
                 let gy = (y / cell).round().clamp(0.0, (h - 1) as f64) as usize;
                 if land[gy * w + gx] {
+                    valid = false;
                     break;
                 }
                 pts.push([x, y]);
