@@ -20,9 +20,22 @@
   const ALMANAC_MODES = [{ key: 'overview', label: 'Overview', icon: 'globe' }, { key: 'kingdoms', label: 'Kingdoms', icon: 'building' }, { key: 'facts', label: 'Facts', icon: 'dice' }, { key: 'rankings', label: 'Rankings', icon: 'activity' }];
   const RANKING_MODES = [{ key: 'settlements', label: 'Settlements' }, { key: 'terrain', label: 'Terrain' }, { key: 'water', label: 'Water' }, { key: 'regions', label: 'Biomes' }];
 
-  // The view consumes one model boundary. Add new Almanac data in model.ts, not here.
-  // Navigation stays component-driven so new Almanac views do not duplicate markup.
-  const model = $derived(buildAlmanacModel(world, overlay, mode));
+  // Paint the Almanac shell first. Generated overlays can be large, so never build the model
+  // during the same render that handles navigation.
+  let model = $state<AlmanacModel | null>(null);
+  let modelRequest = 0;
+  $effect(() => {
+    const requestWorld = world;
+    const requestOverlay = overlay;
+    const requestMode = mode;
+    const id = ++modelRequest;
+    model = null;
+    const frame = requestAnimationFrame(() => {
+      if (id !== modelRequest) return;
+      model = buildAlmanacModel(requestWorld, requestOverlay, requestMode);
+    });
+    return () => cancelAnimationFrame(frame);
+  });
   const features = $derived(model?.features ?? []), settlements = $derived(model?.settlements ?? []), peaks = $derived(model?.peaks ?? []), rivers = $derived(model?.rivers ?? []), lakes = $derived(model?.lakes ?? []), waterfalls = $derived(model?.waterfalls ?? []), landmasses = $derived(model?.landmasses ?? []), ranges = $derived(model?.ranges ?? []), passes = $derived(model?.passes ?? []), volcanoes = $derived(model?.volcanoes ?? []), regions = $derived(model?.regions ?? []);
   const cities = $derived(model?.cities ?? []), towns = $derived(model?.towns ?? []), villages = $derived(model?.villages ?? []), capitals = $derived(model?.capitals ?? []), kingdoms = $derived(model?.kingdoms ?? []), totalPopulation = $derived(model?.totalPopulation ?? 0), cityPopulationShare = $derived(model?.cityPopulationShare ?? 0), capitalPopulationShare = $derived(model?.capitalPopulationShare ?? 0), namedKinds = $derived(model?.namedKinds ?? 0);
   const largestSettlement = $derived(model?.largestSettlement ?? null), highestPeak = $derived(model?.highestPeak ?? null), longestRiver = $derived(model?.longestRiver ?? null), largestRiverBasin = $derived(model?.largestRiverBasin ?? null), largestLake = $derived(model?.largestLake ?? null), largestLandmass = $derived(model?.largestLandmass ?? null), highestWaterfall = $derived(model?.highestWaterfall ?? null), largestRange = $derived(model?.largestRange ?? null);
@@ -62,6 +75,8 @@
 
   {#if !overlay}
     <div class="empty"><Icon name="help" size={18} /><span>Generate a world first. The almanac reads the generated overlay directly.</span></div>
+  {:else if !model}
+    <div class="empty loading"><span class="spinner" aria-hidden="true"></span><span>Reading the generated world…</span></div>
   {:else if mode === 'overview'}
     <div class="cards">
       <div><strong>{fmt(totalPopulation)}</strong><span>estimated population</span></div>
@@ -370,6 +385,9 @@
   .kingdom-main strong { font-size:12px; }
   .kingdom-main small { color:var(--ink-3); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .empty { display:flex; gap:8px; align-items:center; color:var(--ink-3); padding:12px 4px; font-size:12px; }
+  .loading { min-height:90px; justify-content:center; }
+  .spinner { width:14px; height:14px; border:2px solid var(--line-soft); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
   .loading { min-height:90px; justify-content:center; }
   .spinner { width:14px; height:14px; border:2px solid var(--line-soft); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
