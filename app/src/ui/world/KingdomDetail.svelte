@@ -15,80 +15,61 @@
   let { kingdom, allKingdoms, colour, onBack, onSelectKingdom, onSelectFeature }: Props = $props();
   const fmt = (n: number) => n.toLocaleString();
   const neighbour = (id: number) => allKingdoms.find((item) => item.id === id) ?? null;
+  const population = (feature: Feature) => Number(/pop\. ([\d,]+)/.exec(feature.detail ?? '')?.[1]?.replace(/,/g, '') ?? 0);
   const settlementType = (feature: Feature) => feature.kind === 'metropolis' ? 'Metropolis' : feature.kind[0]?.toUpperCase() + feature.kind.slice(1);
 </script>
 
 <div class="detail">
-  <button class="back" type="button" onclick={onBack}><Icon name="chevron-left" size={14} /> Kingdoms</button>
-
+  <button class="back" type="button" onclick={onBack}><Icon name="chevron-left" size={14}></Icon> Kingdoms</button>
   <header class="hero">
-    <div class="crest" style="background:{colour}"><Icon name="building" size={21} /></div>
-    <div class="title">
-      <span class="eyebrow">KINGDOM</span>
-      <h3>{kingdom.name}</h3>
-      <p>Generated political realm · {fmt(kingdom.areaCells)} territory cells</p>
-    </div>
+    <div class="crest" style:background={colour}><Icon name="building" size={21}></Icon></div>
+    <div class="title"><span class="eyebrow">KINGDOM</span><h3>{kingdom.name}</h3><p>Generated political realm · {fmt(kingdom.areaCells)} territory cells</p></div>
   </header>
-
   <div class="stats">
     <div><strong>{fmt(kingdom.population)}</strong><span>population</span></div>
     <div><strong>{fmt(kingdom.areaCells)}</strong><span>territory cells</span></div>
     <div><strong>{fmt(kingdom.settlements.length)}</strong><span>settlements</span></div>
     <div><strong>{fmt(kingdom.neighbours.length)}</strong><span>neighbours</span></div>
   </div>
-
   {#if kingdom.capital}
-    <section>
-      <h4>Capital</h4>
+    <section><h4>Capital</h4>
       <button class="feature-card" type="button" onclick={() => onSelectFeature(kingdom.capital!)}>
-        <span class="feature-icon"><Icon name="castle" size={16} /></span>
-        <span><strong>{kingdom.capital.name}</strong><small>{settlementType(kingdom.capital)} · {fmt(kingdom.capital.detail ? Number(/pop\. ([\d,]+)/.exec(kingdom.capital.detail)?.[1]?.replace(/,/g, '') ?? 0) : 0)} people</small></span>
-        <Icon name="chevron-right" size={14} />
+        <span class="feature-icon"><Icon name="castle" size={16}></Icon></span>
+        <span><strong>{kingdom.capital.name}</strong><small>{settlementType(kingdom.capital)} · {fmt(population(kingdom.capital))} people</small></span>
+        <Icon name="chevron-right" size={14}></Icon>
       </button>
     </section>
   {:else}
     <section><h4>Capital</h4><p class="muted">No generated capital is assigned to this kingdom.</p></section>
   {/if}
-
-  <section>
-    <h4>Settlements</h4>
+  <section><h4>Settlements</h4>
     <div class="settlements">
-      {#each kingdom.settlements.slice().sort((a, b) => {
-        const pa = Number(/pop\. ([\d,]+)/.exec(a.detail ?? '')?.[1]?.replace(/,/g, '') ?? 0);
-        const pb = Number(/pop\. ([\d,]+)/.exec(b.detail ?? '')?.[1]?.replace(/,/g, '') ?? 0);
-        return pb - pa || a.name.localeCompare(b.name);
-      }).slice(0, 12) as settlement (settlement.id)}
+      {#each kingdom.settlements.slice().sort((a, b) => population(b) - population(a) || a.name.localeCompare(b.name)).slice(0, 12) as settlement (settlement.id)}
         <button class="feature-card" type="button" onclick={() => onSelectFeature(settlement)}>
-          <span class="feature-icon"><Icon name="castle" size={15} /></span>
+          <span class="feature-icon"><Icon name="castle" size={15}></Icon></span>
           <span><strong>{settlement.name}</strong><small>{settlementType(settlement)}</small></span>
-          <Icon name="chevron-right" size={14} />
+          <Icon name="chevron-right" size={14}></Icon>
         </button>
       {:else}<p class="muted">No named settlements are attached to this realm.</p>{/each}
     </div>
   </section>
-
-  <section>
-    <h4>Neighbours</h4>
+  <section><h4>Neighbours</h4>
     {#if kingdom.neighbours.length}
       <div class="neighbours">
         {#each kingdom.neighbours as id (id)}
           {@const other = neighbour(id)}
           {#if other}
             <button class="neighbour" type="button" onclick={() => onSelectKingdom(other.id)}>
-              <span class="dot" style="background:{other.id === kingdom.id ? colour : ''}></span>
+              <span class="dot" style:background={other.id === kingdom.id ? colour : undefined}></span>
               <span>{other.name}</span>
-              <Icon name="chevron-right" size={13} />
+              <Icon name="chevron-right" size={13}></Icon>
             </button>
           {/if}
         {/each}
       </div>
     {:else}<p class="muted">No neighbouring realm boundary is recorded.</p>{/if}
   </section>
-
-  <section class="note">
-    <Icon name="help" size={14} />
-    <span>These values come from the generated political overlay. No history, diplomacy, or lore is invented here.</span>
-  </section>
+  <section class="note"><Icon name="help" size={14}></Icon><span>These values come from the generated political overlay. No history, diplomacy, or lore is invented here.</span></section>
 </div>
 
 <style>
