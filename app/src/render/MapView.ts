@@ -257,6 +257,18 @@ export class MapView {
     return (r << 16) | (g << 8) | b;
   }
 
+  private kingdomCorner(x: number, y: number): [number, number] {
+    // Shared deterministic corner offsets make neighbouring cells meet exactly while turning
+    // the raster frontier into a subtly irregular cartographic line.
+    if (x === 0 || y === 0 || (this.geom && x === this.geom.t0_w) || (this.geom && y === this.geom.t0_h)) return [x, y];
+    let h = Math.imul((this.kingdomSeed ^ Math.imul(x + 1, 0x45d9f3b)) >>> 0, 0x27d4eb2d) >>> 0;
+    h ^= Math.imul((y + 1) ^ 0x9e3779b9, 0x85ebca6b);
+    h ^= h >>> 16; h = Math.imul(h, 0x7feb352d) >>> 0; h ^= h >>> 15;
+    const ox = (((h & 0xffff) / 65535) - 0.5) * 0.12;
+    const oy = ((((h >>> 16) & 0xffff) / 65535) - 0.5) * 0.12;
+    return [x + ox, y + oy];
+  }
+
   private drawKingdomOverlay() {
     const g = this.kingdomLayer;
     g.clear();
@@ -278,14 +290,27 @@ export class MapView {
         x++;
       }
     }
+
+    // Draw the territory as translucent, shared-corner polygons rather than a stack of opaque
+    // rectangles. The result keeps the cheap T0 raster but reads as a continuous political zone.
     for (const [kingdom, rects] of runs) {
       const color = this.kingdomColor(kingdom);
       for (const r of rects) {
-        const a = this.cam.worldToScreen(r.x * cell, r.y * cell);
-        const b = this.cam.worldToScreen((r.x + r.n) * cell, (r.y + 1) * cell);
-        g.rect(a[0], a[1], b[0] - a[0], b[1] - a[1]).fill({ color, alpha: 0.13 });
+        const points: [number, number][] = [];
+        for (let x = r.x; x <= r.x + r.n; x++) points.push(this.kingdomCorner(x, r.y));
+        for (let x = r.x + r.n; x >= r.x; x--) points.push(this.kingdomCorner(x, r.y + 1));
+        const first = this.cam.worldToScreen(points[0][0] * cell, points[0][1] * cell);
+        g.moveTo(first[0], first[1]);
+        for (let i = 1; i < points.length; i++) {
+          const p = this.cam.worldToScreen(points[i][0] * cell, points[i][1] * cell);
+          g.lineTo(p[0], p[1]);
+        }
+        g.closePath().fill({ color, alpha: 0.12 });
       }
     }
+
+    // The border uses the same shared corner geometry as the fill, so the visible line hugs the
+    // actual generated territory instead of floating over it.
     const byKingdom = new Map<number, typeof overlay.kingdom_borders>();
     for (const s of overlay.kingdom_borders ?? []) {
       const list = byKingdom.get(s.kingdom) ?? [];
@@ -294,11 +319,13 @@ export class MapView {
     for (const [kingdom, segments] of byKingdom) {
       const color = this.kingdomColor(kingdom);
       for (const s of segments) {
-        const a = this.cam.worldToScreen(s.a[0] * cell, s.a[1] * cell);
-        const b = this.cam.worldToScreen(s.b[0] * cell, s.b[1] * cell);
-        g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]);
+        const a = this.kingdomCorner(s.a[0], s.a[1]);
+        const b = this.kingdomCorner(s.b[0], s.b[1]);
+        const pa = this.cam.worldToScreen(a[0] * cell, a[1] * cell);
+        const pb = this.cam.worldToScreen(b[0] * cell, b[1] * cell);
+        g.moveTo(pa[0], pa[1]); g.lineTo(pb[0], pb[1]);
       }
-      g.stroke({ width: Math.max(1.5, Math.min(5, this.cam.ppf * cell * 0.035)), color, alpha: 0.92, join: 'round', cap: 'round' });
+      g.stroke({ width: Math.max(1.5, Math.min(5, this.cam.ppf * cell * 0.035)), color, alpha: 0.88, join: 'round', cap: 'round' });
     }
   }
 
