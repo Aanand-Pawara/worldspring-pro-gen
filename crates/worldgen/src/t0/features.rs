@@ -70,6 +70,7 @@ pub struct Overlay {
     pub features: Vec<Feature>,
     pub kingdoms: Vec<super::politics::Kingdom>,
     pub kingdom_borders: Vec<super::politics::BorderSegment>,
+    pub kingdom_cells: Vec<u16>,
     /// Naming culture of each settlement (same order as the settlements).
     #[serde(skip)]
     pub settlement_cultures: Vec<u8>,
@@ -121,6 +122,7 @@ pub fn extract(inp: &Inputs) -> Overlay {
     b.sites();
     b.out.kingdoms = inp.politics.kingdoms.clone();
     b.out.kingdom_borders = inp.politics.borders.clone();
+    b.out.kingdom_cells = inp.politics.kingdom_of.clone();
     b.out
 }
 

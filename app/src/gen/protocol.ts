@@ -440,6 +440,7 @@ export interface Overlay {
   features: Feature[];
   kingdoms: { id: number; name: string; capital: number; population: number; area_cells: number; cities: number; towns: number; villages: number }[];
   kingdom_borders: { kingdom: number; other: number; a: [number, number]; b: [number, number] }[];
+  kingdom_cells: number[];
   /** The sketch's conflicts, when the world was drawn. */
   conflicts?: Conflict[];
 }

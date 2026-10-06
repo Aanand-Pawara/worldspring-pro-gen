@@ -247,7 +247,7 @@ export class MapView {
   setKingdomOverlay(on: boolean) {
     this.kingdomOverlayOn = on;
     this.kingdomLayer.visible = on;
-    this.drawKingdomBorders();
+    this.drawKingdomOverlay();
   }
 
   private kingdomColor(id: number): number {
@@ -257,24 +257,48 @@ export class MapView {
     return (r << 16) | (g << 8) | b;
   }
 
-  private drawKingdomBorders() {
+  private drawKingdomOverlay() {
     const g = this.kingdomLayer;
     g.clear();
     const overlay = this.overlay;
-    if (!this.kingdomOverlayOn || !overlay?.kingdom_borders?.length || !this.geom) return;
+    if (!this.kingdomOverlayOn || !this.geom || !overlay?.kingdom_cells?.length) return;
+    const w = this.geom.t0_w;
+    const cell = this.geom.t0_cell_ft;
+    const runs = new Map<number, { x: number; y: number; n: number }[]>();
+    for (let y = 0; y < this.geom.t0_h; y++) {
+      let x = 0;
+      while (x < w) {
+        const id = overlay.kingdom_cells[y * w + x] ?? 65535;
+        if (id === 65535) { x++; continue; }
+        const x0 = x;
+        while (x + 1 < w && (overlay.kingdom_cells[y * w + x + 1] ?? 65535) === id) x++;
+        const list = runs.get(id) ?? [];
+        list.push({ x: x0, y, n: x - x0 + 1 });
+        runs.set(id, list);
+        x++;
+      }
+    }
+    for (const [kingdom, rects] of runs) {
+      const color = this.kingdomColor(kingdom);
+      for (const r of rects) {
+        const a = this.cam.worldToScreen(r.x * cell, r.y * cell);
+        const b = this.cam.worldToScreen((r.x + r.n) * cell, (r.y + 1) * cell);
+        g.rect(a[0], a[1], b[0] - a[0], b[1] - a[1]).fill({ color, alpha: 0.13 });
+      }
+    }
     const byKingdom = new Map<number, typeof overlay.kingdom_borders>();
-    for (const s of overlay.kingdom_borders) {
+    for (const s of overlay.kingdom_borders ?? []) {
       const list = byKingdom.get(s.kingdom) ?? [];
       list.push(s); byKingdom.set(s.kingdom, list);
     }
     for (const [kingdom, segments] of byKingdom) {
       const color = this.kingdomColor(kingdom);
       for (const s of segments) {
-        const a = this.cam.worldToScreen(s.a[0] * this.geom.t0_cell_ft, s.a[1] * this.geom.t0_cell_ft);
-        const b = this.cam.worldToScreen(s.b[0] * this.geom.t0_cell_ft, s.b[1] * this.geom.t0_cell_ft);
+        const a = this.cam.worldToScreen(s.a[0] * cell, s.a[1] * cell);
+        const b = this.cam.worldToScreen(s.b[0] * cell, s.b[1] * cell);
         g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]);
       }
-      g.stroke({ width: Math.max(1.5, Math.min(5, this.cam.ppf * this.geom.t0_cell_ft * 0.035)), color, alpha: 0.9, join: 'round', cap: 'round' });
+      g.stroke({ width: Math.max(1.5, Math.min(5, this.cam.ppf * cell * 0.035)), color, alpha: 0.92, join: 'round', cap: 'round' });
     }
   }
 
@@ -1000,7 +1024,7 @@ export class MapView {
         this.lastWantKey = wantKey;
         this.gen.want(want);
       }
-      this.drawKingdomBorders();
+      this.drawKingdomOverlay();
       this.drawSelectedRiver();
       const t1 = performance.now();
       this.labels?.update(this.cam, now);

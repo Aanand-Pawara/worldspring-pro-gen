@@ -290,7 +290,7 @@ impl T0 {
             best.map(|(_, p, hw)| (p, hw))
         };
         settle::snap_to_water(&mut settlements, cell, &wet, &nearest_river);
-        let politics = politics::assign(world, w, h, &land, &mut settlements, world.params().generate_kingdoms);
+        let politics = politics::assign(world, w, h, cell, &land, &height, &hydro, &mut settlements, world.params().generate_kingdoms);
         let vents_at: Vec<(f64, f64, f64)> = volcanoes.iter().map(|v| (v.cx, v.cy, v.radius_ft)).collect();
         let mut pois = settle::place_pois(&sinp, &settlements, &vents_at);
         // Towns sit beside rivers, not in them (the fine channel meanders through T0 cells).
