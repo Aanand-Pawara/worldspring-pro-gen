@@ -382,14 +382,15 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
         chain.tributary_count = tributary_counts[id];
         chain.length_cells = chain.cells.len().min(u32::MAX as usize) as u32;
         chain.length_ft = chain_length_ft(w, &chain.cells, cell_ft);
-        if matches!(chain.mouth, Mouth::Ocean | Mouth::Lake) {
+        if matches!(chain.mouth, Mouth::Ocean | Mouth::Lake | Mouth::Confluence) {
             if let Some(&last) = chain.cells.last() {
                 let c = last as usize;
                 let r = rec[c] as usize;
                 if r < n && (!land[r] || lake_of[r] != NO_LAKE) {
                     let dx = (c % w) as f64 - (r % w) as f64;
                     let dy = (c / w) as f64 - (r / w) as f64;
-                    chain.length_ft += 0.5 * (dx * dx + dy * dy).sqrt() * cell_ft;
+                    let fraction = if chain.mouth == Mouth::Confluence { 1.0 } else { 0.5 };
+                    chain.length_ft += fraction * (dx * dx + dy * dy).sqrt() * cell_ft;
                 }
             }
         }
