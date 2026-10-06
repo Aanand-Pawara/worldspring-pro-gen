@@ -242,199 +242,124 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
         }
     }
     let is_channel = |i: usize| land[i] && lake_of[i] == NO_LAKE && (q[i] >= threshold || (lake_feed[i] && q[i] >= threshold * 0.20));
-
     let mut upstream = vec![0u8; n];
     for i in 0..n {
         if !is_channel(i) { continue; }
         let r = rec[i] as usize;
-        if r != i && is_channel(r) { upstream[r] = upstream[r].saturating_add(1); }
+        if r < n && r != i && is_channel(r) { upstream[r] = upstream[r].saturating_add(1); }
     }
-    let is_start = |i: usize| is_channel(i) && upstream[i] != 1;
-
-    let mut next_start: Vec<Option<u32>> = vec![None; n];
-    for i in 0..n {
-        if !land[i] || lake_of[i] != NO_LAKE { continue; }
-        let mut path = Vec::new();
-        let mut cur = i;
-        let found = loop {
-            let r = rec[cur] as usize;
-            if r == cur || r >= n || !land[r] || lake_of[r] != NO_LAKE { break None; }
-            if is_start(r) { break Some(r as u32); }
-            if let Some(v) = next_start[r] { break Some(v); }
-            path.push(cur);
-            cur = r;
-        };
-        for p in path { next_start[p] = found; }
-    }
-
+    let starts: Vec<usize> = (0..n).filter(|&i| is_channel(i) && upstream[i] != 1).collect();
+    let mut start_index = vec![usize::MAX; n];
+    for (k, &s) in starts.iter().enumerate() { start_index[s] = k; }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Terminal { Ocean, Lake(u32), Dry }
-    let mut terminal: Vec<Option<Terminal>> = vec![None; n];
+    let mut terminal = vec![None; n];
     for i in 0..n {
         if !land[i] { terminal[i] = Some(Terminal::Ocean); }
         else if lake_of[i] != NO_LAKE { terminal[i] = Some(Terminal::Lake(lake_of[i])); }
     }
     for i in 0..n {
-        if terminal[i].is_some() { continue; }
-        let mut path = Vec::new();
-        let mut cur = i;
+        if terminal[i].is_some() || !land[i] || lake_of[i] != NO_LAKE { continue; }
+        let mut path = Vec::new(); let mut cur = i;
         let end = loop {
             let r = rec[cur] as usize;
-            if r == cur { break Terminal::Dry; }
+            if r == cur || r >= n { break Terminal::Dry; }
             if let Some(t) = terminal[r] { break t; }
-            path.push(cur);
-            cur = r;
+            path.push(cur); cur = r;
         };
         for p in path { terminal[p] = Some(end); }
         terminal[i] = Some(end);
     }
-
+    #[derive(Clone)]
     struct Seg { cells: Vec<u32>, mouth: Mouth }
-    let starts: Vec<usize> = (0..n).filter(|&i| is_start(i)).collect();
-    let mut seg_starting_at = vec![usize::MAX; n];
-    for (k, &start) in starts.iter().enumerate() { seg_starting_at[start] = k; }
-
     let mut segs = Vec::<Seg>::with_capacity(starts.len());
     for &start in &starts {
-        let mut cells = vec![start as u32];
-        let mut cur = start;
-        let mut mouth = Mouth::Dry;
+        let mut cells = Vec::new(); let mut cur = start; let mut guard = 0usize;
         loop {
+            if guard >= n || !is_channel(cur) { break; }
+            guard += 1; cells.push(cur as u32);
             let next = rec[cur] as usize;
-            if next == cur {
-                match terminal[cur].unwrap_or(Terminal::Dry) {
-                    Terminal::Ocean => mouth = Mouth::Ocean,
-                    Terminal::Lake(_) => { mouth = Mouth::Lake; }
-                    Terminal::Dry => {}
-                }
-                break;
-            }
-            if !land[next] { mouth = Mouth::Ocean; cells.push(next as u32); break; }
-            if lake_of[next] != NO_LAKE { mouth = Mouth::Lake; cells.push(next as u32); break; }
-            if is_channel(next) {
-                if is_start(next) { mouth = Mouth::Confluence; break; }
-                cells.push(next as u32);
-                cur = next;
-                continue;
-            }
-            if next_start[cur].is_some() { mouth = Mouth::Confluence; break; }
-            match terminal[next].unwrap_or(Terminal::Dry) {
-                Terminal::Ocean => mouth = Mouth::Ocean,
-                Terminal::Lake(_) => { mouth = Mouth::Lake; }
-                Terminal::Dry => {}
-            }
-            break;
+            if next >= n || next == cur || !land[next] || lake_of[next] != NO_LAKE || !is_channel(next) { break; }
+            if next != start && start_index[next] != usize::MAX { break; }
+            cur = next;
         }
+        let end_cell = *cells.last().unwrap_or(&(start as u32)) as usize;
+        let next = rec[end_cell] as usize;
+        let mouth = if next >= n || !land[next] { Mouth::Ocean }
+        else if lake_of[next] != NO_LAKE { Mouth::Lake }
+        else if is_channel(next) && start_index[next] != usize::MAX { Mouth::Confluence }
+        else if next == end_cell {
+            match terminal[end_cell].unwrap_or(Terminal::Dry) {
+                Terminal::Ocean => Mouth::Ocean, Terminal::Lake(_) => Mouth::Lake, Terminal::Dry => Mouth::Dry,
+            }
+        } else {
+            match terminal[next].unwrap_or(Terminal::Dry) {
+                Terminal::Ocean => Mouth::Ocean, Terminal::Lake(_) => Mouth::Lake, Terminal::Dry => Mouth::Dry,
+            }
+        };
         segs.push(Seg { cells, mouth });
     }
-
     let mut parent = vec![None; segs.len()];
-    for (k, seg) in segs.iter().enumerate() {
+    for (sid, seg) in segs.iter().enumerate() {
         if seg.mouth != Mouth::Confluence { continue; }
-        let end = *seg.cells.last().unwrap() as usize;
-        if let Some(start) = next_start[end].or_else(|| {
-            let r = rec[end] as usize;
-            (r < n && is_start(r)).then_some(r as u32)
-        }) {
-            let p = seg_starting_at[start as usize];
-            if p != usize::MAX { parent[k] = Some(p); }
-        }
+        let end = *seg.cells.last().unwrap() as usize; let next = rec[end] as usize;
+        if next < n && start_index[next] != usize::MAX { parent[sid] = Some(start_index[next]); }
     }
-
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); segs.len()];
-    for (k, p) in parent.iter().enumerate() { if let Some(p) = p { children[*p].push(k); } }
-    let inflow = |k: usize| q[*segs[k].cells.last().unwrap() as usize];
-
+    for (sid, p) in parent.iter().enumerate() { if let Some(p) = p { children[*p].push(sid); } }
+    let inflow = |sid: usize| -> f64 { segs[sid].cells.last().map(|&c| q[c as usize]).unwrap_or(0.0) };
     let mut pending = children.iter().map(Vec::len).collect::<Vec<_>>();
     let mut seg_order = vec![0u8; segs.len()];
     let mut queue: Vec<usize> = (0..segs.len()).filter(|&k| pending[k] == 0).collect();
-    queue.sort_unstable();
-    let mut qpos = 0;
+    queue.sort_unstable(); let mut qpos = 0;
     while qpos < queue.len() {
-        let k = queue[qpos]; qpos += 1; seg_order[k] = 1;
+        let k = queue[qpos]; qpos += 1; if seg_order[k] == 0 { seg_order[k] = 1; }
         if let Some(p) = parent[k] {
             pending[p] = pending[p].saturating_sub(1);
             if pending[p] == 0 {
                 let max = children[p].iter().map(|&c| seg_order[c]).max().unwrap_or(1);
                 let count_max = children[p].iter().filter(|&&c| seg_order[c] == max).count();
-                seg_order[p] = max.saturating_add((count_max >= 2) as u8);
-                queue.push(p);
+                seg_order[p] = max.saturating_add((count_max >= 2) as u8); queue.push(p);
             }
         }
     }
-
     let mut chains = Vec::<River>::new();
     let mut stack: Vec<(usize, Option<usize>)> = (0..segs.len()).filter(|&k| parent[k].is_none()).map(|k| (k, None)).collect();
     stack.sort_by(|a, b| inflow(b.0).total_cmp(&inflow(a.0)).then(a.0.cmp(&b.0)));
-    stack.reverse();
-
     while let Some((root, into)) = stack.pop() {
-        let mut path = vec![root];
-        let mut cur = root;
+        let mut path = vec![root]; let mut cur = root;
         loop {
-            let mut kids = children[cur].clone();
-            if kids.is_empty() { break; }
-            kids.sort_by(|a, b| inflow(*b).total_cmp(&inflow(*a)).then(a.cmp(b)));
-            cur = kids[0];
-            path.push(cur);
+            let mut kids = children[cur].clone(); if kids.is_empty() { break; }
+            kids.sort_by(|a, b| inflow(*b).total_cmp(&inflow(*a)).then(a.cmp(b))); cur = kids[0]; path.push(cur);
         }
-        let chain_id = chains.len();
-        let mut cells = Vec::<u32>::new();
-        for &k in path.iter().rev() {
-            let c = &segs[k].cells;
-            let skip = usize::from(!cells.is_empty());
-            cells.extend_from_slice(&c[skip..]);
-        }
-        if into.is_none() {
-            let mut tail_cur = *cells.last().unwrap() as usize;
-            let mut guard = 0usize;
-            while guard < n {
-                guard += 1;
-                let next = rec[tail_cur] as usize;
-                if next == tail_cur { break; }
-                cells.push(next as u32);
-                if !land[next] || lake_of[next] != NO_LAKE { break; }
-                tail_cur = next;
-            }
-        }
+        let chain_id = chains.len(); let mut cells = Vec::<u32>::new();
+        for &sid in path.iter().rev() { for &cc in &segs[sid].cells { if cells.last().copied() != Some(cc) { cells.push(cc); } } }
+        if cells.is_empty() { continue; }
         let end_cell = *cells.last().unwrap() as usize;
-        let (mouth, mouth_lake) = if into.is_some() {
-            (Mouth::Confluence, None)
-        } else {
+        let (mouth, mouth_lake) = if into.is_some() { (Mouth::Confluence, None) } else {
             match terminal[end_cell].unwrap_or(Terminal::Dry) {
-                Terminal::Ocean => (Mouth::Ocean, None),
-                Terminal::Lake(id) => (Mouth::Lake, Some(id)),
-                Terminal::Dry => (Mouth::Dry, None),
+                Terminal::Ocean => (Mouth::Ocean, None), Terminal::Lake(id) => (Mouth::Lake, Some(id)), Terminal::Dry => (Mouth::Dry, None),
             }
         };
         let source_cell = *cells.first().unwrap() as usize;
         let source_lake = neighbors(w, h, source_cell).filter_map(|(nb, _)| (lake_of[nb] != NO_LAKE && rec[nb] as usize == source_cell).then_some(lake_of[nb])).min();
-        let qv = cells.iter().map(|&c| q[c as usize] as f32).collect();
-        chains.push(River { cells, q: qv, mouth, into, order: seg_order[root].max(1), drainage_area_cells: accumulation[source_cell], peak_discharge: 0.0, tributary_count: 0, source_lake, mouth_lake, length_cells: 0, length_ft: 0.0, basin_id: 0 });
-
-        for &k in &path {
-            let main_child = path.iter().position(|&p| p == k).and_then(|i| path.get(i + 1)).copied();
-            for &kid in &children[k] { if Some(kid) != main_child { stack.push((kid, Some(chain_id))); } }
+        let qv = cells.iter().map(|&cc| q[cc as usize] as f32).collect();
+        chains.push(River { cells, q: qv, mouth, into, order: seg_order[root].max(1), drainage_area_cells: accumulation[source_cell], peak_discharge: 0.0, tributary_count: 0, source_lake, mouth_lake, length_cells: 0, length_ft: 0.0, basin_id: basin_id.get(source_cell).copied().unwrap_or(0) });
+        for &sid in &path {
+            let main_child = path.iter().position(|&p| p == sid).and_then(|i| path.get(i + 1)).copied();
+            for &kid in &children[sid] { if Some(kid) != main_child { stack.push((kid, Some(chain_id))); } }
         }
     }
-
     let tributary_counts: Vec<u16> = (0..chains.len()).map(|id| chains.iter().filter(|r| r.into == Some(id)).count().min(u16::MAX as usize) as u16).collect();
     for (id, chain) in chains.iter_mut().enumerate() {
         chain.peak_discharge = chain.q.iter().copied().fold(0.0f32, f32::max);
         chain.tributary_count = tributary_counts[id];
         chain.length_cells = chain.cells.len().min(u32::MAX as usize) as u32;
-    }
-    for id in 0..chains.len() {
-        let source = *chains[id].cells.first().unwrap_or(&0) as usize;
-        let basin = basin_id.get(source).copied().unwrap_or(0);
-        let drainage = chains[id].cells.iter().map(|&cc| accumulation[cc as usize]).max().unwrap_or(0);
-        chains[id].basin_id = basin;
-        chains[id].drainage_area_cells = drainage;
-        chains[id].length_ft = chain_length_ft(w, &chains[id].cells, cell_ft);
+        chain.length_ft = chain_length_ft(w, &chain.cells, cell_ft);
+        chain.drainage_area_cells = chain.cells.iter().map(|&cc| accumulation[cc as usize]).max().unwrap_or(chain.drainage_area_cells);
     }
     chains
 }
-
 fn assign_basin_ids(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32]) -> Vec<u64> {
     let n = w * h;
     let mut out = vec![0u64; n];

@@ -275,76 +275,45 @@ export class MapView {
   }
 
   private drawKingdomOverlay() {
-    const g = this.kingdomLayer;
-    const overlay = this.overlay;
-    if (!this.kingdomOverlayOn || !this.geom || (!overlay?.kingdom_cells?.length && !overlay?.kingdom_borders?.length)) {
-      g.visible = false;
-      this.kingdomFill.visible = false;
-      return;
-    }
+    const g = this.kingdomLayer, overlay = this.overlay;
+    if (!this.kingdomOverlayOn || !this.geom || !overlay?.kingdom_cells?.length) { g.visible = false; return; }
     g.visible = true;
-    this.kingdomFill.visible = !!overlay.kingdom_cells?.length;
-    const cell = this.geom.t0_cell_ft;
-    const scale = cell * this.cam.ppf;
-
-    // The fill is baked once into an RGBA texture instead of thousands of Graphics rectangles.
-    // That keeps the WorldBox-style territory tint cheap on integrated GPUs.
+    const cell = this.geom.t0_cell_ft, scale = cell * this.cam.ppf;
     if (this.kingdomBuiltOverlay !== overlay) {
       g.clear();
-      if (this.kingdomFillTexture) {
-        this.kingdomFillTexture.destroy(true);
-        this.kingdomFillTexture = null;
-      }
-      if (overlay.kingdom_cells?.length) {
-        const w = this.geom.t0_w;
-        const h = this.geom.t0_h;
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          const image = ctx.createImageData(w, h);
-          for (let i = 0; i < w * h; i++) {
-            const id = overlay.kingdom_cells[i] ?? 65535;
-            if (id === 65535) continue;
-            const color = this.kingdomColor(id);
-            const o = i * 4;
-            image.data[o] = (color >>> 16) & 255;
-            image.data[o + 1] = (color >>> 8) & 255;
-            image.data[o + 2] = color & 255;
-            image.data[o + 3] = 31;
-          }
-          ctx.putImageData(image, 0, 0);
-          this.kingdomFillTexture = Texture.from(canvas);
-          this.kingdomFill.texture = this.kingdomFillTexture;
+      const w = this.geom.t0_w, h = this.geom.t0_h;
+      const runs = new Map<number, { x: number; y: number; n: number }[]>();
+      for (let y = 0; y < h; y++) {
+        let x = 0;
+        while (x < w) {
+          const id = overlay.kingdom_cells[y * w + x] ?? 65535;
+          if (id === 65535) { x++; continue; }
+          const x0 = x;
+          while (x + 1 < w && (overlay.kingdom_cells[y * w + x + 1] ?? 65535) === id) x++;
+          const list = runs.get(id) ?? []; list.push({ x: x0, y, n: x - x0 + 1 }); runs.set(id, list); x++;
         }
       }
-
-      // Keep borders as compact vector paths. One stroke per kingdom, not one stroke per edge.
-      const byKingdom = new Map<number, typeof overlay.kingdom_borders>();
-      for (const segment of overlay.kingdom_borders ?? []) {
-        const list = byKingdom.get(segment.kingdom) ?? [];
-        list.push(segment);
-        byKingdom.set(segment.kingdom, list);
+      for (const [kingdom, sourceRuns] of runs) {
+        const color = this.kingdomColor(kingdom);
+        const merged: { x: number; y: number; n: number; rows: number }[] = [];
+        const active = new Map<string, { x: number; y: number; n: number; rows: number }>();
+        for (const r of sourceRuns) {
+          const key = r.x + ':' + r.n, p = active.get(key);
+          if (p && p.y + p.rows === r.y) p.rows++;
+          else { const n = { x: r.x, y: r.y, n: r.n, rows: 1 }; active.set(key, n); merged.push(n); }
+        }
+        for (const r of merged) g.rect(r.x * cell, r.y * cell, r.n * cell, r.rows * cell).fill({ color, alpha: 0.13 });
       }
+      const byKingdom = new Map<number, typeof overlay.kingdom_borders>();
+      for (const s of overlay.kingdom_borders ?? []) { const list = byKingdom.get(s.kingdom) ?? []; list.push(s); byKingdom.set(s.kingdom, list); }
       for (const [kingdom, segments] of byKingdom) {
         const color = this.kingdomColor(kingdom);
-        for (const segment of segments) {
-          const a = this.kingdomCorner(segment.a[0], segment.a[1]);
-          const b = this.kingdomCorner(segment.b[0], segment.b[1]);
-          g.moveTo(a[0], a[1]);
-          g.lineTo(b[0], b[1]);
-        }
-        g.stroke({ width: 0.032, color, alpha: 0.9, join: 'round', cap: 'round' });
+        for (const s of segments) { const a = this.kingdomCorner(s.a[0], s.a[1]), b = this.kingdomCorner(s.b[0], s.b[1]); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); }
+        g.stroke({ width: 0.035, color, alpha: 0.88, join: 'round', cap: 'round' });
       }
       this.kingdomBuiltOverlay = overlay;
     }
-
-    const px = this.cam.width / 2 - this.cam.cx * scale;
-    const py = this.cam.height / 2 - this.cam.cy * scale;
-    this.kingdomFill.position.set(px, py);
-    this.kingdomFill.scale.set(scale);
-    g.position.set(px, py);
+    g.position.set(this.cam.width / 2 - this.cam.cx * scale, this.cam.height / 2 - this.cam.cy * scale);
     g.scale.set(scale);
   }
 
