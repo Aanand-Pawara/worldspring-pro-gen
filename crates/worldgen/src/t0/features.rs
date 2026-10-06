@@ -488,7 +488,7 @@ impl Builder<'_> {
         let (receivers, _) = super::flood::receivers(inp.w, inp.h, inp.height);
         let mut falls: Vec<(f64, f64, f64, usize)> = Vec::new();
         let mut rapids: Vec<(f64, f64, f64, usize)> = Vec::new();
-        for r in chains {
+        for r in &chains {
             if r.cells.len() < 3 {
                 continue;
             }
