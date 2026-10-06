@@ -199,6 +199,7 @@ export class MapView {
   private kingdomSeed = 0;
   /** Cached political geometry. It is built once per generated overlay, then only transformed with the camera. */
   private kingdomBuiltOverlay: Overlay | null = null;
+  private kingdomBuiltSelection: number | null = null;
   private kingdomBorderSegments: { kingdom: number; a: [number, number]; b: [number, number] }[] = [];
   private selectedRiver: Feature | null = null;
   private toolDrawn = false;
@@ -317,16 +318,18 @@ export class MapView {
     const scale = cell * this.cam.ppf;
     if (!(scale > 0)) return;
 
+    const w = this.geom.t0_w;
+    const h = this.geom.t0_h;
+    const cells = overlay.kingdom_cells;
+
+    // Geometry is expensive. Build it only when the generated overlay changes.
     if (this.kingdomBuiltOverlay !== overlay) {
       fill.clear();
       borders.clear();
+      highlight.clear();
       this.kingdomBorderSegments = [];
 
-      const w = this.geom.t0_w;
-      const h = this.geom.t0_h;
-      const cells = overlay.kingdom_cells;
       const runs = new Map<number, { x: number; y: number; n: number }[]>();
-
       if (cells?.length === w * h) {
         for (let y = 0; y < h; y++) {
           let x = 0;
@@ -343,8 +346,6 @@ export class MapView {
         }
       }
 
-      // Territory fill is stored in exact T0 cell coordinates. Camera scale is applied only
-      // by the parent transform below, so its size and position always match the terrain.
       for (const [kingdom, sourceRuns] of runs) {
         const color = this.kingdomColor(kingdom);
         const merged: { x: number; y: number; n: number; rows: number }[] = [];
@@ -375,7 +376,7 @@ export class MapView {
           const right = x + 1 < w ? cells[y * w + x + 1] : 65535;
           const down = y + 1 < h ? cells[(y + 1) * w + x] : 65535;
           const left = x > 0 ? cells[y * w + x - 1] : 65535;
-          const up = y > 0 ? cells[(y - 1) * w + x] : 65535;
+          const up = y > 0 ? cells[y * w + x - 1] : 65535;
           if (right !== kingdom) addEdge(kingdom, x + 1, y, x + 1, y + 1);
           if (down !== kingdom) addEdge(kingdom, x, y + 1, x + 1, y + 1);
           if (left !== kingdom) addEdge(kingdom, x, y, x, y + 1);
@@ -393,57 +394,57 @@ export class MapView {
       }
 
       this.kingdomBorderSegments = [...edgeByKey.values()];
+      // One batched path per layer. Fixed world-space widths scale naturally with the camera,
+      // avoiding the previous per-frame clear/stroke of every segment.
+      for (const s of this.kingdomBorderSegments) {
+        const a = this.kingdomCorner(s.a[0], s.a[1]), b = this.kingdomCorner(s.b[0], s.b[1]);
+        borders.moveTo(a[0], a[1]);
+        borders.lineTo(b[0], b[1]);
+      }
+      borders.stroke({ width: 0.9, color: 0x241f1c, alpha: 0.94, join: 'round', cap: 'round' });
+
+      for (const s of this.kingdomBorderSegments) {
+        const color = this.kingdomColor(s.kingdom);
+        const a = this.kingdomCorner(s.a[0], s.a[1]), b = this.kingdomCorner(s.b[0], s.b[1]);
+        borders.moveTo(a[0], a[1]);
+        borders.lineTo(b[0], b[1]);
+      }
+      borders.stroke({ width: 0.42, color: 0xffffff, alpha: 0.48, join: 'round', cap: 'round' });
+
       this.kingdomBuiltOverlay = overlay;
+      this.kingdomBuiltSelection = null;
       this.buildKingdomLabels(overlay);
     }
 
-    // Border strokes deliberately live in their own Graphics. Their width is recomputed from
-    // the current camera scale every frame, keeping political lines at a stable screen width.
-    borders.clear();
-    for (const s of this.kingdomBorderSegments) {
-      const a = this.kingdomCorner(s.a[0], s.a[1]), b = this.kingdomCorner(s.b[0], s.b[1]);
-      borders.moveTo(a[0], a[1]);
-      borders.lineTo(b[0], b[1]);
-    }
-    borders.stroke({ width: Math.max(0.18, 3.0 / scale), color: 0x241f1c, alpha: 0.94, join: 'round', cap: 'round' });
-
-    for (const s of this.kingdomBorderSegments) {
-      const color = this.kingdomColor(s.kingdom);
-      const a = this.kingdomCorner(s.a[0], s.a[1]), b = this.kingdomCorner(s.b[0], s.b[1]);
-      borders.moveTo(a[0], a[1]);
-      borders.lineTo(b[0], b[1]);
-      borders.stroke({ width: Math.max(0.10, 1.5 / scale), color, alpha: 1, join: 'round', cap: 'round' });
-    }
-
-    // Selected territory is an exact cell mask, not merely an outline. This makes the
-    // Almanac selection visually obvious while preserving the generator's real boundaries.
-    highlight.clear();
-    if (this.selectedKingdom !== null && overlay.kingdom_cells?.length === this.geom.t0_w * this.geom.t0_h) {
-      const selected = this.selectedKingdom;
-      const w = this.geom.t0_w, h = this.geom.t0_h, cells = overlay.kingdom_cells;
-      const selectedEdges = new Map<string, [number, number, number, number]>();
-
-      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-        if ((cells[y * w + x] ?? 65535) !== selected) continue;
-        highlight.rect(x, y, 1, 1).fill({ color: this.kingdomColor(selected), alpha: 0.30 });
-        const add = (ax: number, ay: number, bx: number, by: number) => {
-          const k = ax < bx || (ax === bx && ay <= by) ? `${ax},${ay},${bx},${by}` : `${bx},${by},${ax},${ay}`;
-          selectedEdges.set(k, [ax, ay, bx, by]);
-        };
-        if (x + 1 >= w || cells[y * w + x + 1] !== selected) add(x + 1, y, x + 1, y + 1);
-        if (y + 1 >= h || cells[(y + 1) * w + x] !== selected) add(x, y + 1, x + 1, y + 1);
-        if (x === 0 || cells[y * w + x - 1] !== selected) add(x, y, x, y + 1);
-        if (y === 0 || cells[(y - 1) * w + x] !== selected) add(x, y, x + 1, y);
+    // Selected territory is rebuilt only when the selected kingdom changes.
+    if (this.kingdomBuiltSelection !== this.selectedKingdom) {
+      highlight.clear();
+      if (this.selectedKingdom !== null && cells?.length === w * h) {
+        const selected = this.selectedKingdom;
+        const selectedEdges = new Map<string, [number, number, number, number]>();
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+          if ((cells[y * w + x] ?? 65535) !== selected) continue;
+          highlight.rect(x, y, 1, 1).fill({ color: this.kingdomColor(selected), alpha: 0.30 });
+          const add = (ax: number, ay: number, bx: number, by: number) => {
+            const k = ax < bx || (ax === bx && ay <= by) ? `${ax},${ay},${bx},${by}` : `${bx},${by},${ax},${ay}`;
+            selectedEdges.set(k, [ax, ay, bx, by]);
+          };
+          if (x + 1 >= w || cells[y * w + x + 1] !== selected) add(x + 1, y, x + 1, y + 1);
+          if (y + 1 >= h || cells[(y + 1) * w + x] !== selected) add(x, y + 1, x + 1, y + 1);
+          if (x === 0 || cells[y * w + x - 1] !== selected) add(x, y, x, y + 1);
+          if (y === 0 || cells[(y - 1) * w + x] !== selected) add(x, y, x + 1, y);
+        }
+        for (const [ax, ay, bx, by] of selectedEdges.values()) {
+          const a = this.kingdomCorner(ax, ay), b = this.kingdomCorner(bx, by);
+          highlight.moveTo(a[0], a[1]);
+          highlight.lineTo(b[0], b[1]);
+        }
+        highlight.stroke({ width: 1.15, color: 0xffffff, alpha: 0.98, join: 'round', cap: 'round' });
       }
-
-      for (const [ax, ay, bx, by] of selectedEdges.values()) {
-        const a = this.kingdomCorner(ax, ay), b = this.kingdomCorner(bx, by);
-        highlight.moveTo(a[0], a[1]);
-        highlight.lineTo(b[0], b[1]);
-      }
-      highlight.stroke({ width: Math.max(0.24, 4.0 / scale), color: 0xffffff, alpha: 0.98, join: 'round', cap: 'round' });
+      this.kingdomBuiltSelection = this.selectedKingdom;
     }
 
+    // The frame loop does only these transforms. Geometry stays on the GPU.
     const tx = this.cam.width / 2 - (this.cam.cx / cell) * scale;
     const ty = this.cam.height / 2 - (this.cam.cy / cell) * scale;
     fill.position.set(tx, ty);
@@ -957,6 +958,7 @@ export class MapView {
     this.kingdomBorderLayer.clear();
     this.kingdomHighlightLayer.clear();
     this.kingdomBorderSegments = [];
+    this.kingdomBuiltSelection = null;
     this.kingdomLabels.removeChildren().forEach((child) => child.destroy());
     if (this.kingdomFillTexture) { this.kingdomFillTexture.destroy(true); this.kingdomFillTexture = null; }
     this.kingdomFill.texture = Texture.WHITE;
