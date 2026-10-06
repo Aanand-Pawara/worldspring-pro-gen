@@ -171,7 +171,7 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
         if lake_of[i] != NO_LAKE {
             q[i] = (q[i] - pet[i]).max(0.0);
         } else if p < 400.0 {
-            q[i] *= 0.997; // gradual transmission loss in dry country; routing remains continuous
+            q[i] *= 0.9995; // mild transmission loss in dry country; long mapped channels remain continuous
         }
         let r = rec[i] as usize;
         if r != i && land[r] {
@@ -217,6 +217,7 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
     let flow_accumulation = accumulate_flow(w, h, land, &lake_of, &rec, &fl.order);
     let basin_id = assign_basin_ids(w, h, land, &lake_of, &rec);
     let rivers = extract_rivers(w, h, cell_ft, land, &lake_of, &rec, &q, &flow_accumulation, &basin_id, RIVER_Q / river_density.max(0.05), &lakes);
+    debug_assert!(validate_river_network(w, h, land, &lake_of, &rec, &rivers));
     Hydro { water, flow_accumulation, basin_id, discharge: q.iter().map(|&v| v as f32).collect(), lake_of, lakes, rivers }
 }
 
@@ -423,6 +424,41 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
     }
     chains
 }
+fn validate_river_network(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32], rivers: &[River]) -> bool {
+    let n = w * h;
+    for river in rivers {
+        if river.cells.is_empty() || river.cells.len() != river.q.len() || river.source_cell != river.cells[0] { return false; }
+        if river.q.iter().any(|&v| !v.is_finite() || v < 0.0) { return false; }
+        for k in 0..river.cells.len() {
+            let c = river.cells[k] as usize;
+            if c >= n || !land[c] || lake_of[c] != NO_LAKE { return false; }
+            if k + 1 < river.cells.len() && rec[c] as usize != river.cells[k + 1] as usize { return false; }
+        }
+        let last = *river.cells.last().unwrap() as usize;
+        match river.mouth {
+            Mouth::Ocean => {
+                let Some(receiver) = river.terminal_receiver.map(|c| c as usize) else { return false; };
+                if river.into.is_some() || receiver >= n || land[receiver] { return false; }
+            }
+            Mouth::Lake => {
+                let Some(receiver) = river.terminal_receiver.map(|c| c as usize) else { return false; };
+                if river.into.is_some() || receiver >= n || lake_of[receiver] == NO_LAKE { return false; }
+            }
+            Mouth::Confluence => {
+                let Some(parent) = river.into else { return false; };
+                let Some(join) = river.terminal_receiver.map(|c| c as usize) else { return false; };
+                if parent >= rivers.len() || !rivers[parent].cells.contains(&(join as u32)) || rec[last] as usize != join { return false; }
+                let parent_q = rivers[parent].cells.iter().position(|&c| c as usize == join).and_then(|k| rivers[parent].q.get(k)).copied().unwrap_or(0.0);
+                if parent_q + 1e-3 < river.q.last().copied().unwrap_or(0.0) { return false; }
+            }
+            Mouth::Dry => {
+                if river.into.is_some() || river.terminal_receiver.is_some() || rec[last] as usize != last { return false; }
+            }
+        }
+    }
+    true
+}
+
 fn assign_basin_ids(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32]) -> Vec<u64> {
     let n = w * h;
     let mut out = vec![0u64; n];
@@ -567,6 +603,36 @@ mod tests {
         assert_eq!(rivers[0].source_cell, 0);
         assert_eq!(rivers[0].terminal_receiver, Some(3));
         assert_eq!(rivers[0].mouth, Mouth::Ocean);
+    }
+
+    #[test]
+    fn river_network_validator_accepts_a_valid_ocean_reach() {
+        let land = vec![true, true, true, false];
+        let lake = vec![NO_LAKE; 4];
+        let rec = vec![1, 2, 3, 3];
+        let rivers = vec![River {
+            cells: vec![0, 1, 2], q: vec![100.0, 150.0, 220.0], mouth: Mouth::Ocean, into: None,
+            order: 1, drainage_area_cells: 3, peak_discharge: 220.0, tributary_count: 0,
+            source_lake: None, mouth_lake: None, length_cells: 3, length_ft: 3.0, basin_id: 1,
+            source_cell: 0, terminal_receiver: Some(3),
+        }];
+        assert!(validate_river_network(4, 1, &land, &lake, &rec, &rivers));
+    }
+
+    #[test]
+    fn river_network_validator_rejects_a_broken_reach() {
+        let land = vec![true, true, true, false];
+        let lake = vec![NO_LAKE; 4];
+        let rec = vec![1, 2, 3, 3];
+        let mut rivers = vec![River {
+            cells: vec![0, 2], q: vec![100.0, 220.0], mouth: Mouth::Ocean, into: None,
+            order: 1, drainage_area_cells: 2, peak_discharge: 220.0, tributary_count: 0,
+            source_lake: None, mouth_lake: None, length_cells: 2, length_ft: 2.0, basin_id: 1,
+            source_cell: 0, terminal_receiver: Some(3),
+        }];
+        assert!(!validate_river_network(4, 1, &land, &lake, &rec, &rivers));
+        rivers[0].cells = vec![0, 1, 2];
+        assert!(validate_river_network(4, 1, &land, &lake, &rec, &rivers));
     }
 
     #[test]

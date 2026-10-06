@@ -874,7 +874,7 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
             }
         }
     }
-    let curves = chains
+    let mut curves: Vec<RiverCurve> = chains
         .iter()
         .enumerate()
         .map(|(ri, r)| {
@@ -937,9 +937,102 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
             RiverCurve::new(pts, z, q, taper, river_seed(world.seed, ri))
         })
         .collect();
+
+    // Large, low-gradient ocean rivers split into a small set of distributaries. The
+    // distributaries start at the actual mapped mouth and fan into ocean cells, so the
+    // delta is part of the same RiverNet used for rendering and terrain/water carving.
+    append_delta_curves(&mut curves, chains, world.seed, w, height, land, hydro, cell);
+
     // Bin extents from the grid (not the world file) so loaded copies index identically.
     let h = height.len() / w;
     RiverNet::new(curves, (w - 1) as f64 * cell, (h - 1) as f64 * cell, cell)
+}
+
+fn append_delta_curves(
+    curves: &mut Vec<RiverCurve>,
+    chains: &[hydro::River],
+    world_seed: u64,
+    w: usize,
+    height: &[f64],
+    land: &[bool],
+    hydro: &hydro::Hydro,
+    cell: f64,
+) {
+    let h = height.len() / w;
+    let threshold = hydro::RIVER_Q;
+    for (ri, river) in chains.iter().enumerate() {
+        if river.mouth != hydro::Mouth::Ocean
+            || river.order < 2
+            || river.peak_discharge < threshold * 6.0
+            || river.cells.len() < 24
+        {
+            continue;
+        }
+        let Some(receiver) = river.terminal_receiver.map(|c| c as usize) else { continue; };
+        if receiver >= land.len() || land[receiver] { continue; }
+        let tail = river.cells.len().min(7);
+        if tail < 3 { continue; }
+        let first = river.cells[river.cells.len() - tail] as usize;
+        let last = *river.cells.last().unwrap() as usize;
+        let grade = (height[first] - height[last]).max(0.0) / (((tail - 1) as f64) * cell).max(1.0);
+        if grade > 0.025 { continue; }
+
+        let mouth = [
+            0.5 * ((last % w) as f64 + (receiver % w) as f64) * cell,
+            0.5 * ((last / w) as f64 + (receiver / w) as f64) * cell,
+        ];
+        let mut dx = (receiver % w) as f64 - (last % w) as f64;
+        let mut dy = (receiver / w) as f64 - (last / w) as f64;
+        let len = crate::core::sqrt(dx * dx + dy * dy).max(1e-9);
+        dx /= len;
+        dy /= len;
+        let px = -dy;
+        let py = dx;
+
+        let branch_count = if river.peak_discharge >= threshold * 12.0 { 3 } else { 2 };
+        let spread = if branch_count == 3 { 0.38 } else { 0.30 };
+        let length_cells = (5.0 + 0.65 * libm::sqrt(river.peak_discharge / threshold)).clamp(5.0, 14.0);
+        let length = length_cells * cell;
+        let shares: &[f64] = if branch_count == 3 { &[0.42, 0.33, 0.25] } else { &[0.58, 0.42] };
+
+        for branch in 0..branch_count {
+            let angle = if branch_count == 3 {
+                [-spread, 0.0, spread][branch]
+            } else {
+                [-spread, spread][branch]
+            };
+            let ca = libm::cos(angle);
+            let sa = libm::sin(angle);
+            let bx = dx * ca - dy * sa;
+            let by = dx * sa + dy * ca;
+            let side = if branch_count == 3 { (branch as f64 - 1.0) * 0.16 } else { (branch as f64 - 0.5) * 0.14 };
+            let mut pts = Vec::<[f64; 2]>::with_capacity(5);
+            let mut q = Vec::<f32>::with_capacity(5);
+            let mut valid = true;
+            let share = shares[branch];
+            for k in 0..5 {
+                let t = k as f64 / 4.0;
+                let lateral = side * length * t * t;
+                let x = mouth[0] + bx * length * t + px * lateral;
+                let y = mouth[1] + by * length * t + py * lateral;
+                if x < 0.0 || y < 0.0 || x >= (w - 1) as f64 * cell || y >= (h - 1) as f64 * cell {
+                    valid = false;
+                    break;
+                }
+                let gx = (x / cell).round().clamp(0.0, (w - 1) as f64) as usize;
+                let gy = (y / cell).round().clamp(0.0, (h - 1) as f64) as usize;
+                if land[gy * w + gx] {
+                    valid = false;
+                    break;
+                }
+                pts.push([x, y]);
+                q.push((river.peak_discharge * share * (1.0 - 0.55 * t)) as f32);
+            }
+            if !valid || pts.len() < 3 { continue; }
+            let taper = vec![0.0, 0.15, 0.25, 0.18, 0.0];
+            curves.push(RiverCurve::new(pts, vec![hydro.water[receiver]; 5], q, taper, river_seed(world_seed, ri * 7 + branch + 1)));
+        }
+    }
 }
 
 fn bilinear(g: &Grid<f32>, x: f64, y: f64) -> f64 {
