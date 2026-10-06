@@ -81,6 +81,22 @@
   let places = $state(readPlaces());
   let kingdoms = $state(readKingdoms());
   function readKingdoms(): boolean { try { return localStorage.getItem('map.kingdoms') !== '0'; } catch { return true; } }
+  function selectKingdom(id: number) {
+    view.setKingdomSelection(id);
+    kingdoms = true;
+    try { localStorage.setItem('map.kingdoms', '1'); } catch {}
+  }
+
+  function openAlmanac() {
+    go('world', 'almanac');
+    if (shell.section === 'world') {
+      shell.tabs.world = 'almanac';
+      shell.collapsed = false;
+      shell.card = false;
+      shell.snap = 'half';
+    }
+  }
+
   function setKingdoms(on: boolean) {
     kingdoms = on;
     try { localStorage.setItem('map.kingdoms', on ? '1' : '0'); } catch {}
@@ -1551,7 +1567,7 @@
         { key: 'library', label: 'Library', icon: 'folder' },
       ]}
       tab={shell.tabs.world}
-      onTab={(k) => go('world', k)}
+      onTab={(k) => k === 'almanac' ? openAlmanac() : go('world', k)}
       onClose={() => go(null)}
       ask={shell.ask ? askBar : undefined}
     >
@@ -1599,7 +1615,7 @@
               </div>
             {/if}
           {:else if shell.tabs.world === 'almanac'}
-            <AlmanacTab {world} {overlay} onSelect={(f) => select({ kind: 'feature', feature: f })} />
+            <AlmanacTab {world} {overlay} onSelect={(f) => select({ kind: 'feature', feature: f })} onSelectKingdom={selectKingdom} />
           {:else}
             <LibraryTab {world} {busy} onOpen={openWorld} onStartOver={startOver} />
           {/if}

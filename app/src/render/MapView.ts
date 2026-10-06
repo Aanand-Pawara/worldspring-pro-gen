@@ -189,10 +189,12 @@ export class MapView {
   /** Selected river highlight, deliberately separate from the always-on river renderer. */
   private readonly selectedRiverLayer = new Graphics();
   private readonly kingdomLayer = new Graphics();
+  private readonly kingdomHighlightLayer = new Graphics();
   private readonly kingdomLabels = new Container();
   private readonly kingdomFill = new Sprite(Texture.WHITE);
   private kingdomFillTexture: Texture | null = null;
   private kingdomOverlayOn = false;
+  private selectedKingdom: number | null = null;
   private kingdomSeed = 0;
   /** Cached political geometry. It is built once per generated overlay, then only transformed with the camera. */
   private kingdomBuiltOverlay: Overlay | null = null;
@@ -259,6 +261,14 @@ export class MapView {
   setKingdomOverlay(on: boolean) {
     this.kingdomOverlayOn = on;
     this.kingdomLayer.visible = on;
+    if (!on) this.selectedKingdom = null;
+    this.drawKingdomOverlay();
+  }
+
+  setKingdomSelection(id: number | null) {
+    this.selectedKingdom = id;
+    if (id !== null) this.kingdomOverlayOn = true;
+    this.kingdomLayer.visible = this.kingdomOverlayOn;
     this.drawKingdomOverlay();
   }
 
@@ -296,6 +306,8 @@ export class MapView {
       return;
     }
     g.visible = true;
+    const highlight = this.kingdomHighlightLayer;
+    highlight.visible = this.selectedKingdom !== null;
     const cell = this.geom.t0_cell_ft;
     const scale = cell * this.cam.ppf;
     if (!(scale > 0)) return;
@@ -339,6 +351,27 @@ export class MapView {
        }
       this.kingdomBuiltOverlay = overlay;
       this.buildKingdomLabels(overlay);
+    }
+    highlight.clear();
+    if (this.selectedKingdom !== null && overlay.kingdom_cells?.length === this.geom.t0_w * this.geom.t0_h) {
+      const selected = this.selectedKingdom;
+      const w = this.geom.t0_w, h = this.geom.t0_h, cells = overlay.kingdom_cells;
+      for (let y = 0; y < h; y++) {
+        let x = 0;
+        while (x < w) {
+          if ((cells[y * w + x] ?? 65535) !== selected) { x++; continue; }
+          const x0 = x;
+          while (x + 1 < w && (cells[y * w + x + 1] ?? 65535) === selected) x++;
+          highlight.rect(x0, y, x - x0 + 1, 1).fill({ color: 0xffffff, alpha: 0.18 });
+          x++;
+        }
+      }
+      for (const s of overlay.kingdom_borders ?? []) {
+        if (s.kingdom !== selected) continue;
+        const a = this.kingdomCorner(s.a[0], s.a[1]), b = this.kingdomCorner(s.b[0], s.b[1]);
+        highlight.moveTo(a[0], a[1]); highlight.lineTo(b[0], b[1]);
+      }
+      highlight.stroke({ width: Math.max(0.14, 3.2 / scale), color: 0xffffff, alpha: 0.95, join: 'round', cap: 'round' });
     }
     g.position.set(this.cam.width / 2 - (this.cam.cx / cell) * scale, this.cam.height / 2 - (this.cam.cy / cell) * scale);
     g.scale.set(scale);
@@ -838,6 +871,8 @@ export class MapView {
     this.geom = geom;
     this.selectedRiver = null;
     this.selectedRiverLayer.clear();
+    this.selectedKingdom = null;
+    this.kingdomHighlightLayer.clear();
     this.overlay = this.baseOverlay = overlay;
     this.kingdomSeed = world.seed >>> 0;
     this.kingdomLayer.visible = this.kingdomOverlayOn;
@@ -868,6 +903,7 @@ export class MapView {
     this.app.stage.addChild(this.tiles.container);
     this.app.stage.addChild(this.kingdomFill);
     this.app.stage.addChild(this.kingdomLayer);
+    this.app.stage.addChild(this.kingdomHighlightLayer);
     this.app.stage.addChild(this.selectedRiverLayer);
     this.app.stage.addChild(this.battle.container);
     this.drawKingdomOverlay();

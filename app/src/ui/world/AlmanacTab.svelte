@@ -9,14 +9,15 @@
     world: WorldFile;
     overlay: Overlay | null;
     onSelect: (f: Feature) => void;
+    onSelectKingdom: (id: number) => void;
   }
 
-  let { world, overlay, onSelect }: Props = $props();
-  let mode = $state<'overview' | 'facts' | 'rankings'>('overview');
+  let { world, overlay, onSelect, onSelectKingdom }: Props = $props();
+  let mode = $state<'overview' | 'facts' | 'rankings' | 'kingdoms'>('overview');
   let ranking = $state<'settlements' | 'terrain' | 'water' | 'regions'>('settlements');
   let shown = $state(0);
 
-  const ALMANAC_MODES = [{ key: 'overview', label: 'Overview', icon: 'globe' }, { key: 'facts', label: 'Facts', icon: 'dice' }, { key: 'rankings', label: 'Rankings', icon: 'activity' }];
+  const ALMANAC_MODES = [{ key: 'overview', label: 'Overview', icon: 'globe' }, { key: 'kingdoms', label: 'Kingdoms', icon: 'castle' }, { key: 'facts', label: 'Facts', icon: 'dice' }, { key: 'rankings', label: 'Rankings', icon: 'activity' }];
   const RANKING_MODES = [{ key: 'settlements', label: 'Settlements' }, { key: 'terrain', label: 'Terrain' }, { key: 'water', label: 'Water' }, { key: 'regions', label: 'Biomes' }];
 
   // The view consumes one model boundary. Add new Almanac data in model.ts, not here.
@@ -37,7 +38,7 @@
   }
 
   function selectFeature(f: Feature) { onSelect(f); }
-  function selectMode(next: 'overview' | 'facts' | 'rankings') { if (mode === next) return; mode = next; if (next === 'facts') shown = 0; }
+  function selectMode(next: 'overview' | 'facts' | 'rankings' | 'kingdoms') { if (mode === next) return; mode = next; if (next === 'facts') shown = 0; }
   function selectRanking(next: 'settlements' | 'terrain' | 'water' | 'regions') { if (ranking === next) return; ranking = next; }
 
   $effect(() => { void overlay; shown = 0; });
@@ -116,6 +117,19 @@
         {#each regionCounts.slice(0, 8) as [kind, count] (kind)}
           <div><span>{kind.replace('_', ' ')}</span><b>{fmt(count)} named regions</b></div>
         {:else}<div class="muted">No named biome regions were extracted.</div>{/each}
+      </div>
+    </section>
+  {:else if mode === 'kingdoms'}
+    <section class="kingdom-page">
+      <div class="kingdom-intro"><h3>Kingdoms of the world</h3><p>Select a realm to highlight its territory on the map.</p></div>
+      <div class="kingdom-list">
+        {#each kingdoms as k (k.id)}
+          <button type="button" class="kingdom-card" onclick={() => onSelectKingdom(k.id)}>
+            <span class="swatch" style:background={['#f05a5a','#4f8df7','#62c370','#f2c94c','#9b72e8','#35b9c8','#f08a4b','#e86aa8'][k.id % 8]}></span>
+            <span class="kingdom-main"><strong>{k.name}</strong><small>{fmt(k.area_cells)} territory cells · {fmt(k.population)} people</small><small>{fmt(k.cities)} cities · {fmt(k.towns)} towns · {fmt(k.villages)} villages{k.capital ? ' · Capital: ' + k.capital.name : ''}</small></span>
+            <Icon name="chevron-right" size={15} />
+          </button>
+        {:else}<div class="empty">No kingdoms were generated for this world.</div>{/each}
       </div>
     </section>
   {:else if mode === 'facts'}
@@ -355,6 +369,15 @@
   .icon { color:var(--ink-2); display:flex; }
   .name { min-width:0; display:flex; flex-direction:column; overflow:hidden; text-align:left; font-size:11px; }
   .name small { color:var(--ink-3); font-size:10px; }
+  .kingdom-page { display:flex; flex-direction:column; gap:8px; }
+  .kingdom-intro p { margin:0; color:var(--ink-2); font-size:11px; line-height:1.4; }
+  .kingdom-list { display:flex; flex-direction:column; gap:4px; }
+  .kingdom-card { display:grid; grid-template-columns:12px 1fr 16px; gap:8px; align-items:center; width:100%; padding:9px 8px; border:1px solid var(--line-faint); border-radius:var(--radius-sm); background:var(--btn-hover); color:var(--ink); text-align:left; cursor:pointer; }
+  .kingdom-card:hover { border-color:var(--accent); background:var(--btn-on); }
+  .swatch { width:12px; height:34px; border-radius:4px; box-shadow:inset 0 0 0 1px rgba(0,0,0,.12); }
+  .kingdom-main { min-width:0; display:flex; flex-direction:column; gap:2px; }
+  .kingdom-main strong { font-size:12px; }
+  .kingdom-main small { color:var(--ink-3); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .empty { display:flex; gap:8px; align-items:center; color:var(--ink-3); padding:12px 4px; font-size:12px; }
   .muted { color:var(--ink-3); font-size:11px; padding:4px; }
 </style>
