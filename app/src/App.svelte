@@ -87,13 +87,14 @@
     try { localStorage.setItem('map.kingdoms', '1'); } catch {}
   }
 
-  function openAlmanac() {
-    go('world', 'almanac');
+  function openWorldTab(tab: 'generate' | 'sketch' | 'almanac' | 'library') {
+    shell.tabs.world = tab;
     shell.section = 'world';
-    shell.tabs.world = 'almanac';
     shell.collapsed = false;
     shell.card = false;
     shell.snap = 'half';
+    if (tab === 'sketch' && !sketchOn) enterSketch();
+    syncTool();
   }
 
   function setKingdoms(on: boolean) {
@@ -1566,11 +1567,12 @@
         { key: 'library', label: 'Library', icon: 'folder' },
       ]}
       tab={shell.tabs.world}
-      onTab={(k) => k === 'almanac' ? openAlmanac() : go('world', k)}
+      onTab={(k) => openWorldTab(k as 'generate' | 'sketch' | 'almanac' | 'library')}
       onClose={() => go(null)}
       ask={shell.ask ? askBar : undefined}
     >
       {#snippet children(peek)}
+        {#key shell.tabs.world}
         {#if shell.tabs.world === 'sketch' && sketchOn}
           <SketchPanel
             {sketcher}
@@ -1619,6 +1621,7 @@
             <LibraryTab {world} {busy} onOpen={openWorld} onStartOver={startOver} />
           {/if}
         {/if}
+        {/key}
       {/snippet}
     </Dock>
   {:else if shell.section === 'edit'}
