@@ -231,6 +231,7 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
         &mut lakes, &lake_net, &lake_inflow,
     );
 
+    connect_nearby_river_termini_to_water(w, h, land, &lake_of, &fl.filled, &q, river_threshold, &mut rec);
     // Route every lake's net outflow through the complete receiver chain.
     let mut lake_order: Vec<usize> = (0..lakes.len()).collect();
     lake_order.sort_by(|&a, &b| lakes[b].level_ft.total_cmp(&lakes[a].level_ft).then(a.cmp(&b)));
@@ -742,6 +743,99 @@ fn rect_distance_lakes(a: (usize, usize, usize, usize), b: (usize, usize, usize,
     let dx = if a.2 < b.0 { b.0 - a.2 - 1 } else if b.2 < a.0 { a.0 - b.2 - 1 } else { 0 };
     let dy = if a.3 < b.1 { b.1 - a.3 - 1 } else if b.3 < a.1 { a.1 - b.3 - 1 } else { 0 };
     dx + dy
+}
+
+/// Connect a mapped river that ends in a nearby dry sink to the nearest reachable water body.
+/// The repair is local, bounded, and refuses to cross established mapped channels.
+fn connect_nearby_river_termini_to_water(
+    w: usize, h: usize, land: &[bool], lake_of: &[u32], filled: &[f64], q: &[f64],
+    threshold: f64, rec: &mut [u32],
+) {
+    const MAX_RADIUS: usize = 24;
+    const MAX_RISE: f64 = 2.0;
+    if threshold <= 0.0 { return; }
+    let n = w * h;
+    let mut seen_terminal = vec![false; n];
+    let mut terminals = Vec::new();
+
+    // Inspect only the downstream edge of high-discharge regions, keeping this O(n).
+    for i in 0..n {
+        if !land[i] || lake_of[i] != NO_LAKE || q[i] < threshold { continue; }
+        let r = rec[i] as usize;
+        if r < n && land[r] && lake_of[r] == NO_LAKE && q[r] >= threshold { continue; }
+        let mut cur = i;
+        let mut terminal = None;
+        for _ in 0..n {
+            let next = rec[cur] as usize;
+            if next >= n || next == cur { terminal = Some(cur); break; }
+            if !land[next] || lake_of[next] != NO_LAKE { break; }
+            cur = next;
+        }
+        let Some(cur) = terminal else { continue; };
+        if seen_terminal[cur] { continue; }
+        seen_terminal[cur] = true;
+        terminals.push(cur);
+    }
+
+    for source in terminals {
+        let source_level = filled[source];
+        let sx = source % w;
+        let sy = source / w;
+        let x0 = sx.saturating_sub(MAX_RADIUS);
+        let y0 = sy.saturating_sub(MAX_RADIUS);
+        let x1 = (sx + MAX_RADIUS + 1).min(w);
+        let y1 = (sy + MAX_RADIUS + 1).min(h);
+        if x0 >= x1 || y0 >= y1 { continue; }
+        let bw = x1 - x0;
+        let bh = y1 - y0;
+        let local = |c: usize| -> usize { (c / w - y0) * bw + (c % w - x0) };
+        let global = |k: usize| -> usize { y0 + k / bw * w + x0 + k % bw };
+        const ROOT: u32 = u32::MAX - 1;
+        let mut parent = vec![u32::MAX; bw * bh];
+        let mut queue = VecDeque::new();
+        parent[local(source)] = ROOT;
+        queue.push_back(source);
+        let mut found = None;
+
+        while let Some(cur) = queue.pop_front() {
+            let cx = cur % w;
+            let cy = cur / w;
+            if sx.abs_diff(cx) + sy.abs_diff(cy) > MAX_RADIUS { continue; }
+            for (nb, _) in neighbors(w, h, cur) {
+                let nx = nb % w;
+                let ny = nb / w;
+                if nx < x0 || nx >= x1 || ny < y0 || ny >= y1 { continue; }
+                if !land[nb] || lake_of[nb] != NO_LAKE {
+                    found = Some((cur, nb));
+                    break;
+                }
+                if nb != source && q[nb] >= threshold * 0.5 { continue; }
+                let key = local(nb);
+                if filled[nb] > source_level + MAX_RISE || parent[key] != u32::MAX { continue; }
+                parent[key] = cur as u32;
+                queue.push_back(nb);
+            }
+            if found.is_some() { break; }
+        }
+
+        let Some((last_land, target)) = found else { continue; };
+        let mut path = vec![last_land as u32];
+        let mut key = local(last_land);
+        while parent[key] != ROOT {
+            let p = parent[key] as usize;
+            path.push(global(p) as u32);
+            key = p;
+        }
+        path.reverse();
+        if path.first().copied() != Some(source as u32)
+            || receiver_path_would_cycle(source as u32, &path, target as u32, rec) { continue; }
+        if path.len() == 1 {
+            rec[source] = target as u32;
+        } else {
+            for pair in path.windows(2) { rec[pair[0] as usize] = pair[1]; }
+            rec[*path.last().unwrap() as usize] = target as u32;
+        }
+    }
 }
 
 fn receiver_path_would_cycle(source_cell: u32, path: &[u32], target_cell: u32, rec: &[u32]) -> bool {
@@ -1816,6 +1910,24 @@ mod hydrology_regression_tests {
     }
 
     #[test]
+    #[test]
+    fn nearby_dry_river_terminus_connects_to_water() {
+        let w = 5; let h = 1;
+        let land = vec![true, true, true, true, false];
+        let lake = vec![NO_LAKE; 5];
+        let filled = vec![10.0, 9.0, 8.0, 8.5, 0.0];
+        let q = vec![100.0, 100.0, 100.0, 0.0, 0.0];
+        let mut rec = vec![1, 2, 2, 3, 4];
+        connect_nearby_river_termini_to_water(w, h, &land, &lake, &filled, &q, 90.0, &mut rec);
+        let mut cur = 2usize; let mut reached = false;
+        for _ in 0..5 {
+            let next = rec[cur] as usize;
+            if !land[next] { reached = true; break; }
+            cur = next;
+        }
+        assert!(reached);
+    }
+
     fn flow_through_lake_preserves_outflow_when_local_balance_is_negative() {
         let land = vec![true, true, true, true, true, false];
         let lake = vec![NO_LAKE, 0, 0, NO_LAKE, NO_LAKE, NO_LAKE];
