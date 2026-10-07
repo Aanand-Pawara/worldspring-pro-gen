@@ -34,6 +34,9 @@ pub struct Feature {
     /// Fine selection path for rivers only: x, y in ft and local channel width in ft.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub river_path: Option<Vec<[f64; 3]>>,
+    /// World-space distributary centerlines used to render delta mouths.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta_paths: Option<Vec<Vec<[f64; 2]>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_order: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -174,7 +177,7 @@ impl Builder<'_> {
             id.push('b');
         }
         let c = self.inp.cell_ft;
-        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, river_path: None, stream_order: None, drainage_area_mi2: None, discharge_index: None, tributary_count: None, length_mi: None, basin_id: None, river_mouth: None, source_lake_id: None, mouth_lake_id: None, area_mi2: None, max_depth_ft: None, inlet_count: None, has_outlet: None, kingdom_id: None, kingdom_name: None, political_rank: None });
+        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, river_path: None, delta_paths: None, stream_order: None, drainage_area_mi2: None, discharge_index: None, tributary_count: None, length_mi: None, basin_id: None, river_mouth: None, source_lake_id: None, mouth_lake_id: None, area_mi2: None, max_depth_ft: None, inlet_count: None, has_outlet: None, kingdom_id: None, kingdom_name: None, political_rank: None });
         id
     }
 
@@ -555,7 +558,7 @@ impl Builder<'_> {
             // Use discharge at the mouth, not the historical peak, because distributary flow
             // is controlled by the water arriving at the bifurcation.
             if r.mouth == Mouth::Ocean
-                && (r.q.last().copied().unwrap_or(r.peak_discharge) as f64) >= super::hydro::RIVER_Q * 3.0
+                && (r.q.last().copied().unwrap_or(r.peak_discharge) as f64) >= super::hydro::RIVER_Q * 2.0
                 && r.cells.len() >= super::hydro::DELTA_MIN_CELLS
             {
                 let tail = r.cells.len().min(6);
@@ -565,23 +568,284 @@ impl Builder<'_> {
                 if grade <= super::hydro::DELTA_MAX_GRADE {
                     let mouth_q = r.q.last().copied().unwrap_or(r.peak_discharge) as f64;
                     let large = mouth_q >= super::hydro::RIVER_Q * 8.0;
-                    let distributaries = if large { 4 } else { 2 };
                     let trunk_ft = if large { 4.0 } else { 3.0 } * inp.cell_ft;
                     let branch_ft = (5.0 + 0.55 * crate::core::sqrt(mouth_q / super::hydro::RIVER_Q)).clamp(6.0, 15.0) * inp.cell_ft;
                     let length_ft = trunk_ft + branch_ft;
                     let spread_ft = (2.0 * branch_ft * 0.30).max(inp.cell_ft);
                     let area_mi2 = (0.5 * length_ft * spread_ft) / (5280.0 * 5280.0);
-                    let mouth_cell = r.terminal_receiver.map(|c| c as usize).unwrap_or(last);
-                    let mx = (mouth_cell % w) as f64;
-                    let my = (mouth_cell / w) as f64;
+                    let mouth_cell = *r.cells.last().unwrap() as usize;
+                    let mut receiver = None;
+                    let mut drain = mouth_cell;
+                    for _ in 0..inp.w * inp.h {
+                        let Some(next) = inp.hydro.receiver.get(drain).copied().map(|v| v as usize) else { break; };
+                        if next >= inp.w * inp.h || next == drain { break; }
+                        drain = next;
+                        if !inp.land[drain] || inp.hydro.lake_of[drain] != super::hydro::NO_LAKE { receiver = Some(drain); break; }
+                    }
+                    let Some(receiver) = receiver else { continue; };
+                    let mx = (receiver % w) as f64;
+                    let my = (receiver / w) as f64;
+                    let mut dx = mx - (mouth_cell % w) as f64;
+                    let mut dy = my - (mouth_cell / w) as f64;
+                    let norm = (dx * dx + dy * dy).sqrt().max(1e-9);
+                    dx /= norm; dy /= norm;
+                    let forward = libm::atan2(dy, dx);
+                    let land = |x: f64, y: f64| {
+                        let gx = (x / inp.cell_ft).round().clamp(0.0, (w - 1) as f64) as usize;
+                        let gy = (y / inp.cell_ft).round().clamp(0.0, (inp.h - 1) as f64) as usize;
+                        inp.land[gy * w + gx]
+                    };
+                    let seed = crate::core::rng::mix64(r.basin_id ^ (r.source_cell as u64).wrapping_mul(0x9e37_79b9));
+                    let q_ratio = (mouth_q / super::hydro::RIVER_Q).max(1.0);
+                    let q_score = libm::log2(q_ratio).max(0.0);
+                    let area_score = libm::log2((r.drainage_area_cells as f64 / 96.0).max(1.0));
+                    let order_score = (r.order.saturating_sub(1) as f64) * 0.65;
+                    let tributary_score = (r.tributary_count as f64 / 3.0).min(2.0) * 0.55;
+                    let length_score = libm::log2((r.length_cells as f64 / 36.0).max(1.0)) * 0.35;
+                    let maturity = q_score * 0.70 + area_score * 0.55 + order_score + tributary_score + length_score;
+                    // Every qualifying delta gets at least three distributaries, then scales
+                    // toward nine as discharge, drainage area, order and length mature.
+                    let desired = (3.0 + maturity * 1.15).round() as usize;
+                    let desired = desired.clamp(3, 9);
+                    let branch_len_cells = (5.5
+                        + 0.85 * crate::core::sqrt(q_ratio)
+                        + 0.45 * (r.order.saturating_sub(1) as f64)
+                        + 0.20 * crate::core::sqrt((r.tributary_count as f64).min(16.0)))
+                        .clamp(6.0, 16.0);
+                    let mut outlets: Vec<(f64, f64, f64)> = Vec::new();
+                    let radius = (branch_len_cells * 2.25).ceil() as usize;
+                    let cx = mouth_cell % w;
+                    let cy = mouth_cell / w;
+                    let x0 = cx.saturating_sub(radius);
+                    let y0 = cy.saturating_sub(radius);
+                    let x1 = (cx + radius + 1).min(w);
+                    let y1 = (cy + radius + 1).min(inp.h);
+                    for gy in y0..y1 {
+                        for gx in x0..x1 {
+                            if land(gx as f64 * inp.cell_ft, gy as f64 * inp.cell_ft) { continue; }
+                            let mut shoreline = false;
+                            for oy in -1i32..=1 {
+                                for ox in -1i32..=1 {
+                                    if ox == 0 && oy == 0 { continue; }
+                                    let nx = gx as i32 + ox;
+                                    let ny = gy as i32 + oy;
+                                    if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < inp.h
+                                        && land(nx as f64 * inp.cell_ft, ny as f64 * inp.cell_ft) {
+                                        shoreline = true;
+                                    }
+                                }
+                            }
+                            if !shoreline { continue; }
+                            let tx = gx as f64 * inp.cell_ft;
+                            let ty = gy as f64 * inp.cell_ft;
+                            let dx = tx - (mouth_cell % w) as f64;
+                            let dy = ty - (mouth_cell / w) as f64;
+                            let d = (dx * dx + dy * dy).sqrt() / inp.cell_ft;
+                            if d < 2.0 || d > branch_len_cells * 2.25 { continue; }
+                            let ang = libm::atan2(dy, dx);
+                            let mut da = ang - forward;
+                            while da > std::f64::consts::PI { da -= std::f64::consts::TAU; }
+                            while da < -std::f64::consts::PI { da += std::f64::consts::TAU; }
+                            if da.cos() < -0.2 { continue; }
+                            let score = d * (0.65 + 0.35 * da.cos()) + da.sin().abs() * branch_len_cells * 0.35;
+                            outlets.push((score, tx, ty));
+                        }
+                    }
+                    outlets.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+                    let mut chosen: Vec<[f64; 2]> = Vec::new();
+                    // Keep a wider candidate pool than the final branch count. Some shoreline
+                    // candidates are rejected by the land-to-water route check, so selecting
+                    // exactly the requested count here used to collapse large deltas to two.
+                    let candidate_limit = desired.saturating_mul(24).min(outlets.len());
+                    let spacing_passes = [
+                        1.55 + 0.08 * branch_len_cells,
+                        1.05 + 0.04 * branch_len_cells,
+                        0.75 + 0.02 * branch_len_cells,
+                    ];
+                    for min_spacing in spacing_passes {
+                        for (_, tx, ty) in outlets.iter().take(candidate_limit) {
+                            if chosen.len() >= candidate_limit { break; }
+                            if chosen.iter().all(|p| {
+                                let dx = tx - p[0];
+                                let dy = ty - p[1];
+                                (dx * dx + dy * dy).sqrt() >= inp.cell_ft * min_spacing
+                            }) {
+                                chosen.push([*tx, *ty]);
+                            }
+                        }
+                        if chosen.len() >= desired { break; }
+                    }
+
+                    // Cubic paths have gentle curvature, a stable ~70° bifurcation tendency,
+                    // and a strict land-until-mouth rule. This is intentionally drainage-aware
+                    // rather than a collection of arbitrary radial rays.
+                    let route_to_water = |start: [f64; 2], target: [f64; 2], seed: u64, max_uphill_grade: f64| -> Vec<[f64; 2]> {
+                        let dx = target[0] - start[0];
+                        let dy = target[1] - start[1];
+                        let dist = (dx * dx + dy * dy).sqrt().max(inp.cell_ft);
+                        let dir = libm::atan2(dy, dx);
+                        let mut da = dir - forward;
+                        while da > std::f64::consts::PI { da -= std::f64::consts::TAU; }
+                        while da < -std::f64::consts::PI { da += std::f64::consts::TAU; }
+                        let side = if da.sin() >= 0.0 { 1.0 } else { -1.0 };
+                        let curve = (0.07 + 0.10 * crate::core::rng::unit(crate::core::rng::mix64(seed ^ 0x3c79_ac49_ba97_f4a7))) * side * dist;
+                        let c1 = [
+                            start[0] + libm::cos(forward) * dist * 0.34 - libm::sin(forward) * curve,
+                            start[1] + libm::sin(forward) * dist * 0.34 + libm::cos(forward) * curve,
+                        ];
+                        let c2 = [
+                            target[0] - libm::cos(dir) * dist * 0.30 - libm::sin(dir) * curve * 0.35,
+                            target[1] - libm::sin(dir) * dist * 0.30 + libm::cos(dir) * curve * 0.35,
+                        ];
+                        let steps = ((dist / inp.cell_ft * 1.6).round() as usize).clamp(10, 30);
+                        let mut pts = Vec::with_capacity(steps + 1);
+                        let start_cell = ((start[1] / inp.cell_ft).round().clamp(0.0, (inp.h - 1) as f64) as usize) * w + (start[0] / inp.cell_ft).round().clamp(0.0, (w - 1) as f64) as usize;
+                        let mut prev_h = inp.height[start_cell];
+                        let mut entered_water = false;
+                        for i in 0..=steps {
+                            let t = i as f64 / steps as f64;
+                            let u = 1.0 - t;
+                            let x = u*u*u*start[0] + 3.0*u*u*t*c1[0] + 3.0*u*t*t*c2[0] + t*t*t*target[0];
+                            let y = u*u*u*start[1] + 3.0*u*u*t*c1[1] + 3.0*u*t*t*c2[1] + t*t*t*target[1];
+                            if i < steps {
+                                let on_land = land(x, y);
+                                if !on_land {
+                                    entered_water = true;
+                                } else if entered_water {
+                                    return Vec::new();
+                                } else {
+                                    let gx = (x / inp.cell_ft).round().clamp(0.0, (w - 1) as f64) as usize;
+                                    let gy = (y / inp.cell_ft).round().clamp(0.0, (inp.h - 1) as f64) as usize;
+                                    let hh = inp.height[gy * w + gx];
+                                    if hh > prev_h + inp.cell_ft * max_uphill_grade { return Vec::new(); }
+                                    prev_h = hh;
+                                }
+                            }
+                            pts.push([x, y]);
+                        }
+                        pts
+                    };
+
+                    let mut delta_paths: Vec<Vec<[f64; 2]>> = Vec::new();
+                    // Search targets for each progressively upstream origin. This prevents a
+                    // couple of bad shoreline candidates from collapsing every delta to two arms.
+                    let tail_span = r.cells.len().min((desired * 2 + 4).max(8));
+                    let origin_count = desired.min(r.cells.len()).max(1);
+                    let mut origins = Vec::with_capacity(origin_count);
+                    for i in 0..origin_count {
+                        let back = if origin_count == 1 {
+                            0
+                        } else {
+                            i * (tail_span.saturating_sub(1)) / (origin_count - 1)
+                        };
+                        origins.push(r.cells[r.cells.len() - 1 - back] as usize);
+                    }
+                    origins.sort_unstable();
+                    origins.dedup();
+                    origins.reverse();
+
+                    for (origin_index, origin) in origins.into_iter().enumerate() {
+                        if delta_paths.len() >= desired { break; }
+                        let start = [(origin % w) as f64 * inp.cell_ft, (origin / w) as f64 * inp.cell_ft];
+                        for (candidate_index, target) in chosen.iter().enumerate() {
+                            if delta_paths.len() >= desired { break; }
+                            let route_seed = seed ^ ((origin_index as u64 + 1) * 0x9e37_79b9)
+                                ^ ((candidate_index as u64 + 1) * 0x85eb_ca6b);
+                            let path = [0.035, 0.060, 0.090]
+                                .into_iter()
+                                .find_map(|grade| {
+                                    let path = route_to_water(start, *target, route_seed, grade);
+                                    (path.len() >= 4).then_some(path)
+                                })
+                                .unwrap_or_default();
+                            if path.len() < 4 { continue; }
+                            let separated = delta_paths.iter().all(|existing| {
+                                existing.iter().step_by(2).all(|p| {
+                                    path.iter().step_by(2).all(|q| {
+                                        let dx = p[0] - q[0];
+                                        let dy = p[1] - q[1];
+                                        dx * dx + dy * dy >= (inp.cell_ft * 1.05).powi(2)
+                                    })
+                                })
+                            });
+                            if separated { delta_paths.push(path); }
+                        }
+                    }
+
+                    // Guarantee a connected mouth for edge cases where shoreline geometry is
+                    // unusually tight. The fallback uses the exact terminal receiver.
+                    if delta_paths.is_empty() {
+                        let target = [(receiver % w) as f64 * inp.cell_ft, (receiver / w) as f64 * inp.cell_ft];
+                        let mouth = *r.cells.last().unwrap() as usize;
+                        let tail = [(mouth % w) as f64 * inp.cell_ft, (mouth / w) as f64 * inp.cell_ft];
+                        let path = [0.035, 0.060, 0.090, 0.120]
+                            .into_iter()
+                            .find_map(|grade| {
+                                let path = route_to_water(tail, target, seed ^ 0x8f4a_7c15, grade);
+                                (path.len() >= 3).then_some(path)
+                            })
+                            .unwrap_or_default();
+                        if path.len() >= 3 { delta_paths.push(path); }
+                    }
+
+                    delta_paths.retain(|p| p.len() >= 3);
+
+                    // A qualifying delta must never silently degrade to two decorative arms.
+                    // If the normal shoreline pool is tight, retry from distinct upstream river
+                    // cells against the exact ocean receiver with progressively relaxed spacing.
+                    if delta_paths.len() < 3 {
+                        let fallback_targets = [
+                            [mx, my],
+                            [mx - dx * inp.cell_ft, my - dy * inp.cell_ft],
+                            [mx + dy * inp.cell_ft, my - dx * inp.cell_ft],
+                            [mx - dy * inp.cell_ft, my + dx * inp.cell_ft],
+                        ];
+                        for (oi, &origin) in r.cells.iter().rev().take(tail_span).enumerate() {
+                            if delta_paths.len() >= desired { break; }
+                            let start = [(origin as usize % w) as f64 * inp.cell_ft, (origin as usize / w) as f64 * inp.cell_ft];
+                            for (ti, target) in fallback_targets.iter().enumerate() {
+                                if delta_paths.len() >= desired { break; }
+                                let gx = (target[0] / inp.cell_ft).round().clamp(0.0, (w - 1) as f64) as usize;
+                                let gy = (target[1] / inp.cell_ft).round().clamp(0.0, (inp.h - 1) as f64) as usize;
+                                if inp.land[gy * w + gx] { continue; }
+                                let path = [0.060, 0.090, 0.120]
+                                    .into_iter()
+                                    .find_map(|grade| {
+                                        let path = route_to_water(start, *target, seed ^ 0xd1e7_0000 ^ ((oi as u64 + 1) << 16) ^ ti as u64, grade);
+                                        (path.len() >= 3).then_some(path)
+                                    })
+                                    .unwrap_or_default();
+                                if path.len() < 3 { continue; }
+                                let separated = delta_paths.iter().all(|existing| {
+                                    existing.iter().step_by(2).all(|p| {
+                                        path.iter().step_by(2).all(|q| {
+                                            let ex = p[0] - q[0];
+                                            let ey = p[1] - q[1];
+                                            ex * ex + ey * ey >= (inp.cell_ft * 0.72).powi(2)
+                                        })
+                                    })
+                                });
+                                if separated { delta_paths.push(path); }
+                            }
+                        }
+                    }
+                    if delta_paths.len() < 3 {
+                        // Do not emit a fake delta feature when geography cannot support the
+                        // minimum branch count. This keeps the invariant honest instead of
+                        // drawing detached decoration.
+                        continue;
+                    }
+
                     let river_name = format!("River {}", r.source_cell);
-                    let delta_id = self.push("delta", NameKind::Delta, mx, my, 0.0, spread_ft.max(length_ft), None,
-                        Some(format!("delta of {} | {} connected distributaries | area {:.1} sq mi | mouth discharge {:.0}", river_name, distributaries, area_mi2, mouth_q)));
+                    let delta_id = self.push("delta", NameKind::Delta, mx, my, forward, spread_ft.max(length_ft), None,
+                        Some(format!("delta of {} | {} connected distributaries | area {:.1} sq mi | mouth discharge {:.0}", river_name, delta_paths.len(), area_mi2, mouth_q)));
                     if let Some(feature) = self.out.features.iter_mut().find(|f| f.id == delta_id) {
                         feature.area_mi2 = Some(area_mi2);
                         feature.discharge_index = Some(mouth_q);
                         feature.length_mi = Some(length_ft / 5280.0);
                         feature.basin_id = Some(r.basin_id);
+                        feature.delta_paths = Some(delta_paths);
                     }
                 }
             }

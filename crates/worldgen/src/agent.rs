@@ -45,6 +45,7 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
             elev_ft: Some(t0.sample(c.x, c.y, t0.cell_ft).round()),
             detail: Some(created_detail(c)),
             river_path: None,
+            delta_paths: None,
             stream_order: None,
             drainage_area_mi2: None,
             discharge_index: None,

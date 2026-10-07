@@ -355,6 +355,66 @@ impl T0 {
             politics: &politics,
         });
         overlay.conflicts = conflicts;
+
+        // Delta distributaries are real river curves. They are added exactly once to the same
+        // RiverNet as ordinary rivers, so terrain carving, water and rendering all agree.
+        let mut river_curves = rivers.rivers.clone();
+        let mut delta_index = 0usize;
+        for feature in overlay.features.iter().filter(|f| f.kind == "delta") {
+            let discharge = feature.discharge_index.unwrap_or(0.0).max(hydro::RIVER_Q);
+            let paths = feature.delta_paths.as_deref().unwrap_or(&[]);
+            if paths.is_empty() { continue; }
+
+            let mut weights = Vec::with_capacity(paths.len());
+            let mut total_weight = 0.0;
+            for i in 0..paths.len() {
+                let weight = 1.0 / (1.0 + i as f64).powf(0.72);
+                weights.push(weight);
+                total_weight += weight;
+            }
+
+            for (path_index, path) in paths.iter().enumerate() {
+                if path.len() < 3 { continue; }
+                let mut pts = path.clone();
+                pts.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6);
+                if pts.len() < 3 { continue; }
+
+                let share = weights[path_index] / total_weight;
+                let q0 = (discharge * share).max(hydro::RIVER_Q * 0.38);
+                let n = pts.len();
+                let q = (0..n)
+                    .map(|i| {
+                        let t = i as f64 / (n - 1) as f64;
+                        (q0 * (1.0 - 0.38 * t)) as f32
+                    })
+                    .collect::<Vec<_>>();
+
+                let z = pts.iter().map(|p| {
+                    let gx = (p[0] / cell).round().clamp(0.0, (w - 1) as f64) as usize;
+                    let gy = (p[1] / cell).round().clamp(0.0, (h - 1) as f64) as usize;
+                    height[gy * w + gx] as f32
+                }).collect::<Vec<_>>();
+
+                // The path already contains the intended delta curvature. Keep RiverCurve's
+                // additional meander subtle so distributaries read as sedimentary channels.
+                let taper = (0..n)
+                    .map(|i| {
+                        let t = i as f64 / (n - 1) as f64;
+                        (0.10 + 0.10 * libm::sin(t * std::f64::consts::PI)) as f32
+                    })
+                    .collect::<Vec<_>>();
+
+                river_curves.push(RiverCurve::new(
+                    pts,
+                    z,
+                    q,
+                    taper,
+                    river_seed(world.seed ^ 0xd3e17a, delta_index),
+                ));
+                delta_index += 1;
+            }
+        }
+        let rivers = RiverNet::new(river_curves, map_w, map_h, cell);
         progress("done", 1.0);
 
         let mut t0 = Self::from_grids(
@@ -874,7 +934,7 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
             }
         }
     }
-    let mut curves: Vec<RiverCurve> = chains
+    let curves: Vec<RiverCurve> = chains
         .iter()
         .enumerate()
         .map(|(ri, r)| {
@@ -908,26 +968,21 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
                     }
                 }
             } else if r.mouth == hydro::Mouth::Ocean || r.mouth == hydro::Mouth::Lake {
-                // Extend the hydro chain to the shoreline so the visible river enters the
-                // receiving water instead of stopping half a cell inland.
-                if let Some(nb) = r.terminal_receiver.map(|c| c as usize) {
-                    if nb < height.len() && (!land[nb] || hydro.lake_of[nb] != hydro::NO_LAKE) {
-                        pts.push([
-                            0.5 * (pts.last().unwrap()[0] + (nb % w) as f64 * cell),
-                            0.5 * (pts.last().unwrap()[1] + (nb / w) as f64 * cell),
-                        ]);
-                        let mouth_z = if !land[nb] {
-                            sea as f32
-                        } else {
-                            hydro.lakes[hydro.lake_of[nb] as usize].level_ft as f32
-                        };
-                        z.push(mouth_z);
-                    }
+                // Walk the actual receiver graph to the receiving water. Never connect every
+                // coastal river to the same eventual ocean cell with a straight segment.
+                let mut cur = *r.cells.last().unwrap() as usize;
+                for _ in 0..height.len() {
+                    let Some(next) = hydro.receiver.get(cur).copied().map(|v| v as usize) else { break; };
+                    if next >= height.len() || next == cur { break; }
+                    let p = [(next % w) as f64 * cell, (next / w) as f64 * cell];
+                    let nz = if !land[next] { sea as f32 } else if hydro.lake_of[next] != hydro::NO_LAKE { hydro.lakes[hydro.lake_of[next] as usize].level_ft as f32 } else { height[next] as f32 };
+                    pts.push(p); z.push(nz); cur = next;
+                    if !land[cur] || hydro.lake_of[cur] != hydro::NO_LAKE { break; }
                 }
             }
             let mut q = r.q.clone();
             let last_q = q.last().copied().unwrap_or(0.0);
-            if pts.len() > q.len() {
+            while pts.len() > q.len() {
                 // The tributary keeps its own discharge at the junction. The parent reach
                 // already contains the accumulated downstream discharge and widens after it.
                 q.push(last_q.max(q.iter().copied().fold(0.0, f32::max)));
@@ -938,105 +993,9 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
         })
         .collect();
 
-    // Large, low-gradient ocean rivers split into a small set of distributaries. The
-    // distributaries start at the actual mapped mouth and fan into ocean cells, so the
-    // delta is part of the same RiverNet used for rendering and terrain/water carving.
-    append_delta_curves(&mut curves, chains, world.seed, w, height, land, hydro, cell);
-
     // Bin extents from the grid (not the world file) so loaded copies index identically.
     let h = height.len() / w;
     RiverNet::new(curves, (w - 1) as f64 * cell, (h - 1) as f64 * cell, cell)
-}
-
-fn append_delta_curves(
-    curves: &mut Vec<RiverCurve>,
-    chains: &[hydro::River],
-    world_seed: u64,
-    w: usize,
-    height: &[f64],
-    land: &[bool],
-    hydro: &hydro::Hydro,
-    cell: f64,
-) {
-    let h = height.len() / w;
-    let threshold = hydro::RIVER_Q;
-    for (ri, river) in chains.iter().enumerate() {
-        if river.mouth != hydro::Mouth::Ocean || river.cells.len() < hydro::DELTA_MIN_CELLS { continue; }
-        let mouth_q = river.q.last().copied().unwrap_or(river.peak_discharge).max(0.0) as f64;
-        if mouth_q < threshold * 3.0 { continue; }
-        let Some(receiver) = river.terminal_receiver.map(|c| c as usize) else { continue; };
-        if receiver >= land.len() || land[receiver] { continue; }
-        let tail = river.cells.len().min(6);
-        let first = river.cells[river.cells.len() - tail] as usize;
-        let last = *river.cells.last().unwrap() as usize;
-        let grade = (height[first] - height[last]).max(0.0) / (((tail - 1) as f64) * cell).max(1.0);
-        if grade > hydro::DELTA_MAX_GRADE { continue; }
-        let mouth = [0.5 * ((last % w) as f64 + (receiver % w) as f64) * cell, 0.5 * ((last / w) as f64 + (receiver / w) as f64) * cell];
-        let mut dx = (receiver % w) as f64 - (last % w) as f64;
-        let mut dy = (receiver / w) as f64 - (last / w) as f64;
-        let norm = crate::core::sqrt(dx * dx + dy * dy).max(1e-9);
-        dx /= norm; dy /= norm;
-        let z = hydro.water[receiver];
-        let large = mouth_q >= threshold * 8.0;
-        let trunk_len = if large { 4.0 } else { 3.0 };
-        let branch_len = (5.0 + 0.55 * libm::sqrt(mouth_q / threshold)).clamp(6.0, 15.0);
-        let trace = |start: [f64; 2], angle: f64, length_cells: f64, curve: f64| -> Option<Vec<[f64; 2]>> {
-            let ca = libm::cos(angle); let sa = libm::sin(angle); let mut pts = Vec::with_capacity(6); let steps = 6usize;
-            for k in 0..steps {
-                let t = k as f64 / (steps - 1) as f64; let lateral = curve * length_cells * cell * t * t;
-                let px = -sa; let py = ca;
-                let x = start[0] + ca * length_cells * cell * t + px * lateral;
-                let y = start[1] + sa * length_cells * cell * t + py * lateral;
-                if x < 0.0 || y < 0.0 || x >= (w - 1) as f64 * cell || y >= (h - 1) as f64 * cell { return None; }
-                if k > 0 {
-                    let gx = (x / cell).round().clamp(0.0, (w - 1) as f64) as usize; let gy = (y / cell).round().clamp(0.0, (h - 1) as f64) as usize;
-                    if land[gy * w + gx] { return None; }
-                }
-                pts.push([x, y]);
-            }
-            Some(pts)
-        };
-        let choose_trace = |start: [f64; 2], angle: f64, length_cells: f64, curve: f64| -> Option<Vec<[f64; 2]>> {
-            let offsets = [0.0, -0.12, 0.12, -0.24, 0.24]; let mut best = None;
-            for offset in offsets {
-                if let Some(pts) = trace(start, angle + offset, length_cells, curve) {
-                    if best.as_ref().map_or(true, |b: &Vec<[f64; 2]>| pts.len() > b.len()) { best = Some(pts); }
-                }
-            }
-            best
-        };
-        let mut add_curve = |pts: Vec<[f64; 2]>, discharge: f64, seed: usize| {
-            if pts.len() < 3 { return; }
-            let n = pts.len();
-            let q = (0..n).map(|k| (discharge * (1.0 - 0.18 * k as f64 / (n - 1) as f64)) as f32).collect();
-            let taper = (0..n).map(|k| { let t = k as f64 / (n - 1) as f64; (crate::core::noise::smoothstep(0.0, 0.15, t) * crate::core::noise::smoothstep(0.0, 0.15, 1.0 - t)) as f32 }).collect();
-            curves.push(RiverCurve::new(pts, vec![z; n], q, taper, river_seed(world_seed, ri * 31 + seed)));
-        };
-        // One connected stem enters the receiving water first. Every distributary begins
-        // at a point on that stem, so the delta cannot render as detached fans.
-        let forward = libm::atan2(dy, dx);
-        let Some(trunk) = choose_trace(mouth, forward, trunk_len, 0.0) else { continue; };
-        let trunk_end = *trunk.last().unwrap();
-        add_curve(trunk, mouth_q, 1);
-        if !large {
-            for branch in 0..2 {
-                let share = if branch == 0 { 0.58 } else { 0.42 }; let angle = forward + if branch == 0 { -0.30 } else { 0.30 };
-                if let Some(pts) = choose_trace(trunk_end, angle, branch_len, if branch == 0 { -0.06 } else { 0.06 }) { add_curve(pts, mouth_q * share, 2 + branch); }
-            }
-        } else {
-            // Large rivers develop a second-order distributary tree: two primary arms,
-            // each splitting once. Flow is conserved at each bifurcation.
-            for primary in 0..2 {
-                let pshare = if primary == 0 { 0.56 } else { 0.44 }; let pangle = forward + if primary == 0 { -0.30 } else { 0.30 };
-                let Some(primary_pts) = choose_trace(trunk_end, pangle, branch_len * 0.55, if primary == 0 { -0.05 } else { 0.05 }) else { continue; };
-                let split = *primary_pts.last().unwrap(); add_curve(primary_pts, mouth_q * pshare, 4 + primary);
-                for side in 0..2 {
-                    let share = pshare * if side == 0 { 0.57 } else { 0.43 }; let angle = pangle + if side == 0 { -0.24 } else { 0.24 };
-                    if let Some(pts) = choose_trace(split, angle, branch_len * 0.72, if side == 0 { -0.045 } else { 0.045 }) { add_curve(pts, mouth_q * share, 8 + primary * 2 + side); }
-                }
-            }
-        }
-    }
 }
 
 fn bilinear(g: &Grid<f32>, x: f64, y: f64) -> f64 {

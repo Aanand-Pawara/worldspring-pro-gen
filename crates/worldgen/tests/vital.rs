@@ -29,10 +29,10 @@ fn drainage_basins_are_stable_and_complete() {
         let world = World::from_json(&world_json(seed)).unwrap();
         let t0 = worldgen::t0::T0::generate(&world);
         let h = &t0.extra.as_ref().unwrap().hydro;
-        assert_eq!(h.basin_id.len(), t0.land.len());
-        for i in 0..t0.land.len() {
-            if !t0.land[i] { continue; }
-            assert_ne!(h.basin_id[i], 0, "seed {seed}: land cell {i} has no basin");
+        assert_eq!(h.basin_id.len(), t0.height.data.len());
+        for i in 0..t0.height.data.len() {
+            if t0.height.data[i] as f64 <= world.params().sea_level_ft { continue; }
+            assert_ne!(h.basin_id[i], 0, "seed {seed}: above-sea cell {i} has no basin");
         }
         for r in &h.rivers {
             let source = r.cells[0] as usize;

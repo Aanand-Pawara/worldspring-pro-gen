@@ -10,6 +10,7 @@
 //!   strictly lower than the cell upstream of it.
 
 use serde::Serialize;
+use std::collections::VecDeque;
 
 use super::climate::Climate;
 use super::flood::{neighbors, priority_flood, receivers};
@@ -91,6 +92,7 @@ pub struct Hydro {
     /// Stable drainage-basin identity for every land cell.
     pub basin_id: Vec<u64>,
     pub discharge: Vec<f32>,
+    pub receiver: Vec<u32>,
     pub lake_of: Vec<u32>,
     pub lakes: Vec<Lake>,
     pub rivers: Vec<River>,
@@ -143,11 +145,14 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
     let (mut rec, _) = receivers(w, h, &fl.filled);
 
     for lake_id in 0..lakes.len() {
-        lakes[lake_id].outlet = lakes[lake_id].cells.iter().copied().find(|&c| {
-            let r = rec[c as usize] as usize;
-            r != c as usize && lake_of[r] != lake_id as u32
-        });
+        lakes[lake_id].outlet = None;
     }
+
+    // Repair the receiver graph before deciding lake outlets. Priority-flood can leave a
+    // perfectly valid flat lake without a receiver edge even when a low spill path exists.
+    repair_nearby_water_sinks(w, h, land, &lake_of, &fl.filled, &mut rec, 8);
+    connect_close_lakes(w, h, land, &lake_of, &fl.filled, &mut rec, &mut lakes);
+
     for i in 0..n {
         if !land[i] || lake_of[i] != NO_LAKE { continue; }
         let r = rec[i] as usize;
@@ -157,10 +162,7 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
         }
     }
 
-    // Priority-flood preserves flat filled plateaus. A strict downhill receiver can
-    // therefore strand a mapped stream on an equal-height coastal plateau. Repair only
-    // true sinks and only through other sink cells on a non-increasing filled surface.
-    repair_nearby_water_sinks(w, h, land, &lake_of, &fl.filled, &mut rec, 8);
+    // Receiver repair and lake-to-lake spill links are complete before water balance.
     let route_order = receiver_order(w, h, land, &rec);
 
     // Water balance. `raw` ignores losses (catchment supply); `q` includes them.
@@ -206,7 +208,6 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
             LakeKind::Fresh
         };
     }
-
     // Water surface: sea and lakes (salt flats are dry). Tiles interpolate it over wet
     // corners only (`T0::sample_water`), so shorelines stay clean without dilation.
     let mut water = vec![DRY; n];
@@ -227,7 +228,7 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
     let basin_id = assign_basin_ids(w, h, land, &lake_of, &rec);
     let rivers = extract_rivers(w, h, cell_ft, land, &lake_of, &rec, &q, &flow_accumulation, &basin_id, RIVER_Q / river_density.max(0.05), &lakes);
     debug_assert!(validate_river_network(w, h, land, &lake_of, &rec, &rivers));
-    Hydro { water, flow_accumulation, basin_id, discharge: q.iter().map(|&v| v as f32).collect(), lake_of, lakes, rivers }
+    Hydro { water, flow_accumulation, basin_id, discharge: q.iter().map(|&v| v as f32).collect(), receiver: rec, lake_of, lakes, rivers }
 }
 
 fn repair_nearby_water_sinks(w: usize, h: usize, land: &[bool], lake_of: &[u32], filled: &[f64], rec: &mut [u32], max_radius: usize) {
@@ -242,30 +243,244 @@ fn repair_nearby_water_sinks(w: usize, h: usize, land: &[bool], lake_of: &[u32],
         let sx = start % w; let sy = start / w;
         let mut queue = VecDeque::new(); queue.push_back(start);
         stamp[start] = generation; parent[start] = start;
-        let mut target = None;
+        let mut target: Option<(usize, usize)> = None;
         while let Some(cur) = queue.pop_front() {
             for (nb, _) in neighbors(w, h, cur) {
                 let nx = nb % w; let ny = nb / w;
                 if sx.abs_diff(nx) + sy.abs_diff(ny) > max_radius { continue; }
-                if !land[nb] || lake_of[nb] != NO_LAKE { target = Some(nb); break; }
+                if !land[nb] || lake_of[nb] != NO_LAKE { target = Some((nb, cur)); break; }
                 if rec[nb] as usize != nb || stamp[nb] == generation { continue; }
                 if filled[nb] > filled[cur] + 1e-6 { continue; }
                 stamp[nb] = generation; parent[nb] = cur; queue.push_back(nb);
             }
             if target.is_some() { break; }
         }
-        let Some(mut water) = target else { continue; };
+        let Some((water, last_land)) = target else { continue; };
+        let mut cur = last_land;
         let mut path = Vec::new();
-        while water != start {
-            path.push(water);
-            let p = parent[water];
+        loop {
+            path.push(cur);
+            let p = parent[cur];
+            if p == cur { break; }
             if p == usize::MAX { path.clear(); break; }
-            water = p;
+            cur = p;
         }
-        if path.is_empty() { continue; }
-        path.push(start); path.reverse();
+        if path.is_empty() || path.last().copied() != Some(start) { continue; }
+        path.reverse();
         for pair in path.windows(2) { rec[pair[0]] = pair[1] as u32; }
+        rec[*path.last().unwrap() as usize] = water as u32;
     }
+}
+
+fn lake_receiver_chain_valid(start: usize, land: &[bool], lake_of: &[u32], rec: &[u32], lakes: &[Lake]) -> bool {
+    if start >= lakes.len() { return false; }
+    let n = rec.len();
+    let mut seen = vec![false; lakes.len()];
+    let mut lake = start;
+    loop {
+        if lake >= lakes.len() || seen[lake] { return false; }
+        seen[lake] = true;
+        let Some(outlet) = lakes[lake].outlet else { return true; };
+        let mut cur = outlet as usize;
+        if cur >= n || lake_of[cur] != lake as u32 { return false; }
+        let mut advanced = false;
+        for _ in 0..n {
+            let next = rec[cur] as usize;
+            if next >= n || next == cur { return false; }
+            if !land[next] { return true; }
+            if lake_of[next] != NO_LAKE {
+                lake = lake_of[next] as usize;
+                advanced = true;
+                break;
+            }
+            cur = next;
+        }
+        if !advanced { return false; }
+    }
+}
+
+fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], filled: &[f64], rec: &mut [u32], lakes: &mut [Lake]) {
+    if lakes.len() < 2 { return; }
+    const MAX_CONNECT_CELLS: f64 = 48.0;
+    const LEVEL_TOLERANCE_FT: f64 = 2.0;
+
+    // Natural outlets are the fallback. A nearby lower lake may become the preferred outlet,
+    // producing a real connecting river while keeping the two lake bodies separate.
+    for lake_id in 0..lakes.len() {
+        lakes[lake_id].outlet = lakes[lake_id].cells.iter().copied().find(|&c| {
+            let r = rec[c as usize] as usize;
+            r != c as usize && lake_of[r] != lake_id as u32
+        });
+    }
+
+    let mut centers = Vec::with_capacity(lakes.len());
+    let mut boundaries: Vec<Vec<u32>> = Vec::with_capacity(lakes.len());
+    for lake in lakes.iter() {
+        let (sx, sy) = lake.cells.iter().fold((0.0, 0.0), |(x, y), &c| {
+            (x + (c as usize % w) as f64, y + (c as usize / w) as f64)
+        });
+        let inv = 1.0 / lake.cells.len().max(1) as f64;
+        centers.push([sx * inv, sy * inv]);
+        let mut edge = Vec::new();
+        for &c in &lake.cells {
+            let boundary = neighbors(w, h, c as usize).any(|(nb, _)| land[nb] && lake_of[nb] == NO_LAKE);
+            if boundary { edge.push(c); }
+        }
+        boundaries.push(edge);
+    }
+
+    let mut order: Vec<usize> = (0..lakes.len()).collect();
+    order.sort_by(|&a, &b| lakes[b].level_ft.total_cmp(&lakes[a].level_ft).then(a.cmp(&b)));
+
+    for &source in &order {
+        if boundaries[source].is_empty() { continue; }
+        let mut candidates: Vec<(bool, bool, f64, usize)> = Vec::new();
+        for target in 0..lakes.len() {
+            if target == source { continue; }
+            if lakes[target].level_ft >= lakes[source].level_ft { continue; }
+            if !lake_receiver_chain_valid(target, land, lake_of, rec, lakes) { continue; }
+            let dx = centers[target][0] - centers[source][0];
+            let dy = centers[target][1] - centers[source][1];
+            let d = (dx * dx + dy * dy).sqrt();
+            if d <= MAX_CONNECT_CELLS {
+                let ocean_connected = lake_reaches_ocean(target, land, lake_of, rec, lakes);
+                candidates.push((ocean_connected, lakes[target].outlet.is_some(), d, target));
+            }
+        }
+        candidates.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then(b.1.cmp(&a.1))
+                .then(a.2.total_cmp(&b.2))
+                .then(a.3.cmp(&b.3))
+        });
+
+        for (_, _, _, target) in candidates.into_iter().take(8) {
+            let Some((source_cell, path, target_cell)) = lake_spill_path(
+                w, h, land, lake_of, filled, lakes[source].level_ft,
+                &boundaries[source], &boundaries[target], target as u32,
+            ) else { continue; };
+            if path.is_empty() || path.iter().any(|&c| lake_of[c as usize] != NO_LAKE) { continue; }
+
+            if receiver_path_would_cycle(source_cell, &path, target_cell, rec) {
+                continue;
+            }
+            rec[source_cell as usize] = path[0];
+            for pair in path.windows(2) { rec[pair[0] as usize] = pair[1]; }
+            if let Some(&last) = path.last() {
+                rec[last as usize] = target_cell;
+            } else {
+                continue;
+            }
+            lakes[source].outlet = Some(source_cell);
+            lakes[target].inlet_count = lakes[target].inlet_count.saturating_add(1);
+            break;
+        }
+    }
+}
+
+fn receiver_path_would_cycle(source_cell: u32, path: &[u32], target_cell: u32, rec: &[u32]) -> bool {
+    let n = rec.len();
+    let mut forbidden = Vec::with_capacity(path.len() + 1);
+    forbidden.push(source_cell as usize);
+    forbidden.extend(path.iter().map(|&c| c as usize));
+    let mut cur = target_cell as usize;
+    for _ in 0..n {
+        if cur >= n { return true; }
+        if forbidden.contains(&cur) { return true; }
+        let next = rec[cur] as usize;
+        if next == cur { return false; }
+        cur = next;
+    }
+    true
+}
+
+fn lake_reaches_ocean(lake_id: usize, land: &[bool], lake_of: &[u32], rec: &[u32], lakes: &[Lake]) -> bool {
+    let n = rec.len();
+    let mut lake_seen = vec![false; lakes.len()];
+    let mut cur_lake = lake_id;
+    for _ in 0..=lakes.len() {
+        if cur_lake >= lakes.len() || lake_seen[cur_lake] { return false; }
+        lake_seen[cur_lake] = true;
+        let Some(outlet) = lakes[cur_lake].outlet else { return false; };
+        let mut cur = outlet as usize;
+        for _ in 0..n {
+            if cur >= n { return false; }
+            let next = rec[cur] as usize;
+            if next == cur { return false; }
+            if !land[next] { return true; }
+            if lake_of[next] != NO_LAKE {
+                cur_lake = lake_of[next] as usize;
+                break;
+            }
+            cur = next;
+        }
+    }
+    false
+}
+
+/// Find a real downhill spill route between nearby lakes. The search is local, deterministic,
+/// and constrained to the source lake's water level, so proximity alone never creates a river
+/// over a ridge. The returned path contains only land cells between the two lake cells.
+fn lake_spill_path(
+    w: usize, h: usize, land: &[bool], lake_of: &[u32], filled: &[f64], source_level: f64,
+    source_boundary: &[u32], target_boundary: &[u32], target_id: u32,
+) -> Option<(u32, Vec<u32>, u32)> {
+    let mut min_x = w; let mut min_y = h; let mut max_x = 0usize; let mut max_y = 0usize;
+    for &c in source_boundary.iter().chain(target_boundary.iter()) {
+        let x = c as usize % w; let y = c as usize / w;
+        min_x = min_x.min(x); min_y = min_y.min(y); max_x = max_x.max(x); max_y = max_y.max(y);
+    }
+    let margin = 3usize;
+    min_x = min_x.saturating_sub(margin); min_y = min_y.saturating_sub(margin);
+    max_x = (max_x + margin + 1).min(w); max_y = (max_y + margin + 1).min(h);
+    if min_x >= max_x || min_y >= max_y { return None; }
+    let bw = max_x - min_x; let bh = max_y - min_y;
+    let local = |c: usize| -> usize { (c / w - min_y) * bw + (c % w - min_x) };
+    let global = |k: usize| -> usize { min_y + k / bw * w + min_x + k % bw };
+    let mut parent = vec![u32::MAX; bw * bh];
+    let mut source_cell = vec![u32::MAX; bw * bh];
+    let mut queue = VecDeque::new();
+    const ROOT: u32 = u32::MAX - 1;
+
+    for &lake_cell in source_boundary {
+        let c = lake_cell as usize;
+        for (nb, _) in neighbors(w, h, c) {
+            if !land[nb] || lake_of[nb] != NO_LAKE { continue; }
+            let x = nb % w; let y = nb / w;
+            if x < min_x || x >= max_x || y < min_y || y >= max_y { continue; }
+            if filled[nb] > source_level + 2.0 { continue; }
+            let k = local(nb);
+            if parent[k] != u32::MAX { continue; }
+            parent[k] = ROOT;
+            source_cell[k] = lake_cell;
+            queue.push_back(nb);
+        }
+    }
+
+    while let Some(cur) = queue.pop_front() {
+        for (nb, _) in neighbors(w, h, cur) {
+            if nb % w < min_x || nb % w >= max_x || nb / w < min_y || nb / w >= max_y { continue; }
+            if lake_of[nb] == target_id {
+                let mut path = vec![cur as u32];
+                let mut k = local(cur);
+                while parent[k] != ROOT {
+                    let p = parent[k] as usize;
+                    path.push(global(p) as u32);
+                    k = p;
+                }
+                path.reverse();
+                return Some((source_cell[k], path, nb as u32));
+            }
+            if !land[nb] || lake_of[nb] != NO_LAKE || filled[nb] > source_level + 2.0 { continue; }
+            // A river can spill across a flat saddle, but it cannot climb a real rise.
+            if filled[nb] > filled[cur] + 0.5 { continue; }
+            let k = local(nb);
+            if parent[k] != u32::MAX { continue; }
+            parent[k] = cur as u32;
+            queue.push_back(nb);
+        }
+    }
+    None
 }
 
 fn receiver_order(w: usize, h: usize, land: &[bool], rec: &[u32]) -> Vec<u32> {
@@ -288,7 +503,16 @@ fn receiver_order(w: usize, h: usize, land: &[bool], rec: &[u32]) -> Vec<u32> {
             if indegree[r] == 0 { queue.push(r); }
         }
     }
-    if out.len() != land_count { for i in 0..n { if land[i] && !out.iter().any(|&c| c as usize == i) { out.push(i as u32); } } }
+    if out.len() != land_count {
+        let mut seen = vec![false; n];
+        for &i in &out { seen[i as usize] = true; }
+        for i in 0..n {
+            if land[i] && !seen[i] {
+                seen[i] = true;
+                out.push(i as u32);
+            }
+        }
+    }
     out
 }
 
@@ -330,7 +554,7 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
     let is_seed = |i: usize| {
         land[i]
             && lake_of[i] == NO_LAKE
-            && ((lake_feed[i] && q[i] >= threshold * 0.20)
+            && ((lake_feed[i] && q[i] >= threshold * 0.12)
                 || (q[i] >= threshold && !upstream_above_threshold[i]))
     };
     let mut channel = vec![false; n];
@@ -456,7 +680,11 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
         };
         let source_cell = *cells.first().unwrap() as usize;
         let source_lake = neighbors(w, h, source_cell).filter_map(|(nb, _)| (lake_of[nb] != NO_LAKE && rec[nb] as usize == source_cell).then_some(lake_of[nb])).min();
-        let qv = cells.iter().map(|&cc| q[cc as usize] as f32).collect();
+        let mut qv: Vec<f32> = cells.iter().map(|&cc| q[cc as usize] as f32).collect();
+        if source_lake.is_some() {
+            let floor = (threshold * 0.5).max(RIVER_Q * 0.12) as f32;
+            for v in &mut qv { *v = (*v).max(floor); }
+        }
         chains.push(River { cells, q: qv, mouth, into, order: seg_order[root].max(1), drainage_area_cells: accumulation[source_cell], peak_discharge: 0.0, tributary_count: 0, source_lake, mouth_lake, length_cells: 0, length_ft: 0.0, basin_id: basin_id.get(source_cell).copied().unwrap_or(0), source_cell: source_cell as u32, terminal_receiver: None });
         for &sid in &path {
             let main_child = path.iter().position(|&p| p == sid).and_then(|i| path.get(i + 1)).copied();
@@ -478,13 +706,21 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
     // isolated. If a sea or lake is a few cells away, recover that terminal as a coastal/lake
     // mouth so the river does not visibly stop on land beside water.
     for chain in &mut chains {
-        if chain.mouth != Mouth::Dry || chain.cells.len() < 3 { continue; }
         let last = *chain.cells.last().unwrap() as usize;
-        if let Some((receiver, mouth, lake_id)) = nearby_water_terminal(w, h, land, lake_of, last, 6) {
-            chain.mouth = mouth;
-            chain.mouth_lake = lake_id;
-            chain.terminal_receiver = Some(receiver as u32);
+        let mut receiver = chain.terminal_receiver.map(|c| c as usize);
+        let mut mouth = chain.mouth;
+        let mut lake_id = chain.mouth_lake;
+        if mouth == Mouth::Dry || receiver.is_none() {
+            if let Some((r, m, l)) = nearby_water_terminal(w, h, land, lake_of, last, 12) {
+                receiver = Some(r);
+                mouth = m;
+                lake_id = l;
+            }
         }
+        // Keep terminal_receiver as the immediate receiver. The complete receiver graph is retained in Hydro.
+        chain.mouth = mouth;
+        chain.mouth_lake = lake_id;
+        chain.terminal_receiver = chain.terminal_receiver.or(receiver.map(|r| r as u32));
     }
 
     for (id, chain) in chains.iter_mut().enumerate() {
@@ -549,13 +785,17 @@ fn validate_river_network(w: usize, h: usize, land: &[bool], lake_of: &[u32], re
         }
         let last = *river.cells.last().unwrap() as usize;
         match river.mouth {
-            Mouth::Ocean => {
-                let Some(receiver) = river.terminal_receiver.map(|c| c as usize) else { return false; };
-                if river.into.is_some() || receiver >= n || land[receiver] { return false; }
-            }
-            Mouth::Lake => {
-                let Some(receiver) = river.terminal_receiver.map(|c| c as usize) else { return false; };
-                if river.into.is_some() || receiver >= n || lake_of[receiver] == NO_LAKE { return false; }
+            Mouth::Ocean | Mouth::Lake => {
+                let Some(mut receiver) = river.terminal_receiver.map(|c| c as usize) else { return false; };
+                if river.into.is_some() || receiver >= n { return false; }
+                let mut guard = 0usize; let mut reached = false;
+                while guard < n {
+                    guard += 1;
+                    if !land[receiver] { reached = river.mouth == Mouth::Ocean; break; }
+                    if lake_of[receiver] != NO_LAKE { reached = river.mouth == Mouth::Lake; break; }
+                    let next = rec[receiver] as usize; if next >= n || next == receiver { break; } receiver = next;
+                }
+                if !reached { return false; }
             }
             Mouth::Confluence => {
                 let Some(parent) = river.into else { return false; };

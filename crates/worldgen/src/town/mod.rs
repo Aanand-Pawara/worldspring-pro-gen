@@ -424,14 +424,27 @@ impl Site<'_> {
         best.map(|(_, q, t, hw)| (q, t, hw))
     }
 
-    /// Buildable: dry, off the channel, not too steep.
+    /// Buildable: completely dry, off the channel, not too steep.
     fn buildable(&self, poly: &[P]) -> bool {
+        if poly.len() < 3 { return false; }
         let c = centroid(poly);
-        if self.wet(c) || self.near_river(c, 12.0) {
-            return false;
+        if self.wet(c) || self.near_river(c, 12.0) { return false; }
+        let m = poly.len();
+        let mut samples = Vec::with_capacity(m * 5 + 1);
+        samples.push(c);
+        for i in 0..m {
+            let a = poly[i];
+            let b = poly[(i + 1) % m];
+            let mid = lerp(a, b, 0.5);
+            samples.push(a);
+            samples.push(lerp(a, b, 0.25));
+            samples.push(mid);
+            samples.push(lerp(a, b, 0.75));
+            samples.push(lerp(c, mid, 0.5));
         }
+        if samples.iter().any(|p| self.wet(*p) || self.near_river(*p, 12.0)) { return false; }
         let (lo, hi) = self.relief(poly);
-        hi - lo < 6.0 && poly.iter().all(|p| !self.wet(*p))
+        hi - lo < 6.0
     }
     /// Lowest and highest ground over a polygon (corners, edge midpoints, centre).
     fn relief(&self, poly: &[P]) -> (f64, f64) {
@@ -560,6 +573,27 @@ fn river_pieces(t0: &T0, center: P, r: f64) -> Vec<(P, P, f64)> {
             prev = Some((p, cp.w));
         }
     }
+    // Delta paths are finalized into T0's overlay before lazy town layouts are generated.
+    // Include them in the same channel index so buildings cannot straddle a distributary.
+    if let Some(extra) = &t0.extra {
+        for feature in extra.overlay.features.iter().filter(|f| f.kind == "delta") {
+            let dx = feature.x - center[0];
+            let dy = feature.y - center[1];
+            if dx * dx + dy * dy > (r + 0.5 * feature.extent_ft + 500.0).powi(2) { continue; }
+            let hw = 0.5 * crate::lod::rivers::width_ft(feature.discharge_index.unwrap_or(crate::t0::hydro::RIVER_Q));
+            if let Some(paths) = &feature.delta_paths {
+                for path in paths {
+                    for pair in path.windows(2) {
+                        let a = sub(pair[0], center);
+                        let b = sub(pair[1], center);
+                        if a[0].min(b[0]) > r || a[0].max(b[0]) < -r || a[1].min(b[1]) > r || a[1].max(b[1]) < -r { continue; }
+                        out.push((a, b, hw));
+                    }
+                }
+            }
+        }
+    }
+
     out
 }
 
@@ -611,6 +645,10 @@ pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
     let on_water = s.coastal || s.river || !site.river.is_empty();
     l.on_water = on_water;
     assign_functions(&site, s, on_water, &mut rng, &mut l);
+    // Final dry-land validation is deliberately a separate pass after all generators have
+    // finished. Bridges and piers remain the only intentional water-crossing geometry.
+    validate_dry_layout(&site, &mut l);
+
     // Local → world.
     let tw = |p: &mut P| *p = add(*p, center);
     for b in &mut l.buildings {
@@ -644,6 +682,55 @@ pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
     l
 }
 
+fn validate_dry_layout(site: &Site, l: &mut Layout) {
+    fn dry_poly(site: &Site, poly: &[P]) -> bool {
+        if poly.len() < 3 { return false; }
+        if site.wet(centroid(poly)) || poly.iter().any(|&p| site.wet(p)) { return false; }
+        for edge in poly.windows(2).chain(std::iter::once(&[poly[poly.len() - 1], poly[0]][..])) {
+            let steps = (dist(edge[0], edge[1]) / 20.0).ceil().max(1.0) as usize;
+            for i in 1..steps {
+                if site.wet(lerp(edge[0], edge[1], i as f64 / steps as f64)) { return false; }
+            }
+        }
+        let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+        for &p in poly {
+            bb[0] = bb[0].min(p[0]); bb[1] = bb[1].min(p[1]);
+            bb[2] = bb[2].max(p[0]); bb[3] = bb[3].max(p[1]);
+        }
+        let nx = ((bb[2] - bb[0]) / 40.0).ceil().clamp(2.0, 8.0) as usize;
+        let ny = ((bb[3] - bb[1]) / 40.0).ceil().clamp(2.0, 8.0) as usize;
+        for iy in 0..=ny {
+            for ix in 0..=nx {
+                let p = [
+                    bb[0] + (bb[2] - bb[0]) * ix as f64 / nx as f64,
+                    bb[1] + (bb[3] - bb[1]) * iy as f64 / ny as f64,
+                ];
+                if contains(poly, p) && site.wet(p) { return false; }
+            }
+        }
+        true
+    }
+    fn dry_path(site: &Site, path: &[P], bridges: &[Vec<P>]) -> bool {
+        if path.len() < 2 { return false; }
+        for seg in path.windows(2) {
+            let steps = (dist(seg[0], seg[1]) / 10.0).ceil().max(1.0) as usize;
+            for i in 0..=steps {
+                let p = lerp(seg[0], seg[1], i as f64 / steps as f64);
+                if site.wet(p) && !bridges.iter().any(|b| contains(b, p)) { return false; }
+            }
+        }
+        true
+    }
+    let bridges = l.bridges.clone();
+    l.buildings.retain(|b| site.buildable(&b.poly) && dry_poly(site, &b.poly));
+    l.streets.retain(|p| dry_path(site, p, &bridges));
+    l.walls.retain(|p| dry_poly(site, p));
+    l.blocks.retain(|p| dry_poly(site, p));
+    l.plazas.retain(|p| dry_poly(site, p));
+    l.fields.retain(|p| dry_poly(site, p));
+    l.districts.retain(|p| dry_poly(site, p));
+    l.roads.retain(|(pts, class, _)| *class >= 4 || dry_path(site, pts, &bridges));
+}
 /// Buildings with no way in: every point just outside their walls lies inside another
 /// building (lot splitting can box one in). They become yards.
 fn drop_walled_in(l: &mut Layout) {
@@ -2872,7 +2959,7 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
         let c = [rad * libm::cos(a), rad * libm::sin(a)];
         let house = rect(c, [-libm::sin(a), libm::cos(a)], 30.0, 20.0);
         let clear = l.buildings.iter().all(|b| dist(centroid(&b.poly), c) > 28.0);
-        if clear && (site.buildable(&house) || k > 300) {
+        if clear && site.buildable(&house) {
             let pad = site.pad(&house);
             let ward = if tier == Tier::Village { Ward::Rural } else { Ward::Common };
             l.buildings.push(Building { poly: house, ward, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None });
