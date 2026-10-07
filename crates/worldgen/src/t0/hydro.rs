@@ -269,9 +269,12 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
         }
     }
 
-    // The lake-to-river pass changes receivers after the first routing order was used for q.
-    // Rebuild the order before deriving accumulation and basin ids from the final graph.
+    // Receiver topology is final now. Recompute discharge from that final graph so newly
+    // connected lakes actually feed the rivers extracted below.
     let route_order = receiver_order(w, h, land, &mut rec);
+    let (q, lake_net) = recompute_final_discharge(
+        w, h, land, &lake_of, &rec, &route_order, &clim, &feed, &lakes,
+    );
     let flow_accumulation = accumulate_flow(w, h, land, &lake_of, &rec, &route_order);
     let basin_id = assign_basin_ids(w, h, land, &lake_of, &rec);
     let rivers = extract_rivers(w, h, cell_ft, land, &lake_of, &rec, &q, &flow_accumulation, &basin_id, river_threshold, &lakes);
@@ -292,11 +295,11 @@ fn connect_lakes_to_river_channels(
     lake_net: &[f64],
 ) {
     if lakes.is_empty() { return; }
-    const MAX_CONNECT_CELLS: usize = 24;
+    const MAX_CONNECT_CELLS: usize = 36;
     // A lake outlet can seed a mapped river even when its discharge is modest. Keep the
     // connection selective, but do not require the full river-mapping threshold at the
     // lake boundary or many plausible lake-fed headwaters disappear.
-    let min_q = (threshold * 0.35).max(1.0);
+    let min_q = (threshold * 0.10).max(1.0);
     let mut order: Vec<usize> = (0..lakes.len()).collect();
     order.sort_by(|&a, &b| lakes[b].level_ft.total_cmp(&lakes[a].level_ft).then(a.cmp(&b)));
 
@@ -310,7 +313,7 @@ fn connect_lakes_to_river_channels(
     }
 
     for lake_id in order {
-        if lakes[lake_id].outlet.is_some() || lake_net[lake_id] <= threshold * 0.05 || boundaries[lake_id].is_empty() { continue; }
+        if lakes[lake_id].outlet.is_some() || lake_net[lake_id] <= threshold * 0.02 || boundaries[lake_id].is_empty() { continue; }
         let Some((source_cell, path, target)) = lake_river_spill_path(
             w, h, land, lake_of, filled, q, rec, min_q, lakes[lake_id].level_ft,
             MAX_CONNECT_CELLS, &boundaries[lake_id],
@@ -852,6 +855,90 @@ fn receiver_order(w: usize, h: usize, land: &[bool], rec: &mut [u32]) -> Vec<u32
         }
     }
 }
+fn recompute_final_discharge(
+    w: usize,
+    h: usize,
+    land: &[bool],
+    lake_of: &[u32],
+    rec: &[u32],
+    order: &[u32],
+    clim: &Climate,
+    feed: &[(usize, f64)],
+    lakes: &[Lake],
+) -> (Vec<f64>, Vec<f64>) {
+    let n = w * h;
+    let pet: Vec<f64> = clim.temp.iter().map(|&t| (350.0 + 55.0 * t as f64).max(0.0)).collect();
+    let mut q = vec![0.0f64; n];
+    let mut lake_net = vec![0.0f64; lakes.len()];
+
+    for &(cell, amount) in feed {
+        if cell >= n { continue; }
+        if lake_of[cell] != NO_LAKE {
+            lake_net[lake_of[cell] as usize] += amount;
+        } else {
+            q[cell] += amount;
+        }
+    }
+
+    // Route land runoff once through the final receiver graph. Water entering a lake becomes
+    // part of that lake's budget instead of being copied into every lake cell.
+    for &ii in order {
+        let i = ii as usize;
+        let runoff = (clim.precip[i] as f64 - 0.65 * pet[i]).max(0.0);
+        if lake_of[i] != NO_LAKE {
+            lake_net[lake_of[i] as usize] += runoff - pet[i];
+            continue;
+        }
+
+        q[i] += runoff;
+        let r = rec[i] as usize;
+        if r >= n || r == i || !land[r] { continue; }
+        if lake_of[r] != NO_LAKE {
+            lake_net[lake_of[r] as usize] += q[i];
+        } else {
+            q[r] += q[i];
+        }
+    }
+
+    // Lakes now form a real serial water network. Higher lakes are processed first so their
+    // outflow reaches lower lakes before those lower lakes send water downstream.
+    let mut lake_order: Vec<usize> = (0..lakes.len()).collect();
+    lake_order.sort_by(|&a, &b| {
+        lakes[b].level_ft.total_cmp(&lakes[a].level_ft).then(a.cmp(&b))
+    });
+
+    let mut outlets = vec![None; lakes.len()];
+    for i in 0..n {
+        let id = lake_of[i];
+        if id == NO_LAKE { continue; }
+        let r = rec[i] as usize;
+        if r < n && r != i && (lake_of[r] == NO_LAKE || !land[r]) {
+            outlets[id as usize] = Some(i);
+        }
+    }
+
+    for lake_id in lake_order {
+        let net = lake_net[lake_id].max(0.0);
+        let Some(outlet) = outlets[lake_id] else { continue; };
+        if net <= 0.0 { continue; }
+
+        let mut cur = outlet;
+        for _ in 0..n {
+            let next = rec[cur] as usize;
+            if next >= n || next == cur || !land[next] { break; }
+            if lake_of[next] != NO_LAKE {
+                let target = lake_of[next] as usize;
+                if target != lake_id { lake_net[target] += net; }
+                break;
+            }
+            q[next] += net;
+            cur = next;
+        }
+    }
+
+    (q, lake_net)
+}
+
 fn accumulate_flow(w: usize, h: usize, land: &[bool], _lake_of: &[u32], rec: &[u32], order: &[u32]) -> Vec<u32> {
     let n = w * h;
     let mut acc = vec![0u32; n];
