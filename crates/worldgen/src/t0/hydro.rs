@@ -301,10 +301,10 @@ fn lake_receiver_chain_valid(start: usize, land: &[bool], lake_of: &[u32], rec: 
 
 fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], filled: &[f64], rec: &mut [u32], lakes: &mut [Lake]) {
     if lakes.len() < 2 { return; }
-    const MAX_CONNECT_CELLS: f64 = 48.0;
+    // Measure proximity between lake shores, not centres. Large lakes can be physically
+    // adjacent while their centres are far apart.
+    const MAX_CONNECT_CELLS: usize = 48;
 
-    // Natural outlets are the fallback. A nearby lower lake may become the preferred outlet,
-    // producing a real connecting river while keeping the two lake bodies separate.
     for lake_id in 0..lakes.len() {
         lakes[lake_id].outlet = lakes[lake_id].cells.iter().copied().find(|&c| {
             let r = rec[c as usize] as usize;
@@ -312,71 +312,89 @@ fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], fille
         });
     }
 
-    let mut centers = Vec::with_capacity(lakes.len());
+    let mut bounds = Vec::with_capacity(lakes.len());
     let mut boundaries: Vec<Vec<u32>> = Vec::with_capacity(lakes.len());
     for lake in lakes.iter() {
-        let (sx, sy) = lake.cells.iter().fold((0.0, 0.0), |(x, y), &c| {
-            (x + (c as usize % w) as f64, y + (c as usize / w) as f64)
-        });
-        let inv = 1.0 / lake.cells.len().max(1) as f64;
-        centers.push([sx * inv, sy * inv]);
+        let mut min_x = w; let mut min_y = h; let mut max_x = 0usize; let mut max_y = 0usize;
+        for &c in &lake.cells {
+            let x = c as usize % w; let y = c as usize / w;
+            min_x = min_x.min(x); min_y = min_y.min(y);
+            max_x = max_x.max(x); max_y = max_y.max(y);
+        }
+        bounds.push((min_x, min_y, max_x, max_y));
         let mut edge = Vec::new();
         for &c in &lake.cells {
-            let boundary = neighbors(w, h, c as usize).any(|(nb, _)| land[nb] && lake_of[nb] == NO_LAKE);
-            if boundary { edge.push(c); }
+            if neighbors(w, h, c as usize).any(|(nb, _)| land[nb] && lake_of[nb] == NO_LAKE) {
+                edge.push(c);
+            }
         }
         boundaries.push(edge);
     }
 
+    let rect_distance = |a: (usize, usize, usize, usize), b: (usize, usize, usize, usize)| -> usize {
+        let dx = if a.2 < b.0 { b.0 - a.2 - 1 } else if b.2 < a.0 { a.0 - b.2 - 1 } else { 0 };
+        let dy = if a.3 < b.1 { b.1 - a.3 - 1 } else if b.3 < a.1 { a.1 - b.3 - 1 } else { 0 };
+        dx + dy
+    };
+
+    // Process high lakes first so every forced connection points downhill into a lower lake.
     let mut order: Vec<usize> = (0..lakes.len()).collect();
     order.sort_by(|&a, &b| lakes[b].level_ft.total_cmp(&lakes[a].level_ft).then(a.cmp(&b)));
 
     for &source in &order {
         if boundaries[source].is_empty() { continue; }
-        let mut candidates: Vec<(bool, bool, f64, usize)> = Vec::new();
+
+        let source_already_ocean = lakes[source].outlet.is_some()
+            && lake_reaches_ocean(source, land, lake_of, rec, lakes);
+
+        let mut candidates: Vec<(bool, bool, usize, usize)> = Vec::new();
         for target in 0..lakes.len() {
-            if target == source { continue; }
-            if lakes[target].level_ft >= lakes[source].level_ft { continue; }
+            if target == source || lakes[target].level_ft >= lakes[source].level_ft { continue; }
             if !lake_receiver_chain_valid(target, land, lake_of, rec, lakes) { continue; }
-            let dx = centers[target][0] - centers[source][0];
-            let dy = centers[target][1] - centers[source][1];
-            let d = (dx * dx + dy * dy).sqrt();
-            if d <= MAX_CONNECT_CELLS {
-                let ocean_connected = lake_reaches_ocean(target, land, lake_of, rec, lakes);
-                candidates.push((ocean_connected, lakes[target].outlet.is_some(), d, target));
-            }
+
+            let proximity = rect_distance(bounds[source], bounds[target]);
+            if proximity > MAX_CONNECT_CELLS { continue; }
+
+            let ocean_connected = lake_reaches_ocean(target, land, lake_of, rec, lakes);
+            // Never replace a valid ocean-reaching outlet with a dead-end inland lake.
+            if source_already_ocean && !ocean_connected { continue; }
+
+            candidates.push((ocean_connected, lakes[target].outlet.is_some(), proximity, target));
         }
+
         candidates.sort_by(|a, b| {
             b.0.cmp(&a.0)
                 .then(b.1.cmp(&a.1))
-                .then(a.2.total_cmp(&b.2))
+                .then(a.2.cmp(&b.2))
                 .then(a.3.cmp(&b.3))
         });
 
+        // Try only a small deterministic shortlist. The expensive part is the actual
+        // spill-path search, so we avoid doing it for every lake pair.
         for (_, _, _, target) in candidates.into_iter().take(8) {
             let Some((source_cell, path, target_cell)) = lake_spill_path(
                 w, h, land, lake_of, filled, lakes[source].level_ft,
                 &boundaries[source], &boundaries[target], target as u32,
             ) else { continue; };
-            if path.is_empty() || path.iter().any(|&c| lake_of[c as usize] != NO_LAKE) { continue; }
 
+            if path.is_empty() || path.iter().any(|&c| lake_of[c as usize] != NO_LAKE) {
+                continue;
+            }
             if receiver_path_would_cycle(source_cell, &path, target_cell, rec) {
                 continue;
             }
+
+            // This is the actual hydrological edge: source lake -> land channel -> target lake.
             rec[source_cell as usize] = path[0];
             for pair in path.windows(2) { rec[pair[0] as usize] = pair[1]; }
-            if let Some(&last) = path.last() {
-                rec[last as usize] = target_cell;
-            } else {
-                continue;
-            }
+            rec[*path.last().unwrap() as usize] = target_cell;
             lakes[source].outlet = Some(source_cell);
-            lakes[target].inlet_count = lakes[target].inlet_count.saturating_add(1);
+            let target_id = lake_of[target_cell as usize] as usize;
+            lakes[target_id].inlet_count = lakes[target_id].inlet_count.saturating_add(1);
             break;
         }
     }
 }
-
 fn receiver_path_would_cycle(source_cell: u32, path: &[u32], target_cell: u32, rec: &[u32]) -> bool {
     let n = rec.len();
     let mut forbidden = Vec::with_capacity(path.len() + 1);
@@ -879,6 +897,49 @@ mod tests {
         let order = vec![2, 0, 1];
         let acc = accumulate_flow(3, 1, &land, &lake, &rec, &order);
         assert_eq!(acc, vec![1, 3, 1]);
+    }
+
+    #[test]
+    fn close_lakes_connect_by_shore_distance_not_center_distance() {
+        let w = 64;
+        let h = 3;
+        let n = w * h;
+        let mut lake_of = vec![NO_LAKE; n];
+        let mut source_cells = Vec::new();
+        let mut target_cells = Vec::new();
+        for y in 0..h {
+            for x in 0..24 {
+                let c = y * w + x;
+                lake_of[c] = 0;
+                source_cells.push(c as u32);
+            }
+            for x in 25..w {
+                let c = y * w + x;
+                lake_of[c] = 1;
+                target_cells.push(c as u32);
+            }
+        }
+        let land = lake_of.iter().map(|&id| id == NO_LAKE).collect::<Vec<_>>();
+        let filled = (0..n).map(|i| {
+            let x = i % w;
+            if x == 24 { 100.0 } else if x == 25 { 90.0 } else { 80.0 }
+        }).collect::<Vec<_>>();
+        let mut rec: Vec<u32> = (0..n).map(|i| i as u32).collect();
+        let mut lakes = vec![
+            Lake { level_ft: 100.0, cells: source_cells, kind: LakeKind::Fresh, max_depth_ft: 100.0, outlet: None, inlet_count: 0 },
+            Lake { level_ft: 90.0, cells: target_cells, kind: LakeKind::Fresh, max_depth_ft: 100.0, outlet: None, inlet_count: 0 },
+        ];
+        connect_close_lakes(w, h, &land, &lake_of, &filled, &mut rec, &mut lakes);
+        assert!(lakes[0].outlet.is_some());
+        assert!(lakes[1].inlet_count > 0);
+        let outlet = lakes[0].outlet.unwrap() as usize;
+        let mut cur = rec[outlet] as usize;
+        for _ in 0..n {
+            if lake_of[cur] == 1 { return; }
+            cur = rec[cur] as usize;
+            assert!(cur < n);
+        }
+        panic!("lake connector did not reach the lower lake");
     }
 
     #[test]
