@@ -4,6 +4,8 @@
 //! (anchor at the pole of inaccessibility, angle along the principal axis, size in feet).
 
 use serde::Serialize;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 use super::biome::Biome;
 use super::climate::{Climate, distance_to};
@@ -554,108 +556,71 @@ impl Builder<'_> {
             }
             let _ = q;
 
-            // Deltas stay attached to the real terminal river cell and nearby ocean shoreline.
-            // The old system started branches from several upstream cells and searched a large
-            // shoreline radius, creating detached combs and scratchy lines unrelated to flow.
-            if r.mouth == Mouth::Ocean
-                && (r.q.last().copied().unwrap_or(r.peak_discharge) as f64) >= super::hydro::RIVER_Q * 2.0
-                && r.cells.len() >= super::hydro::DELTA_MIN_CELLS
-            {
-                let mouth_cell = *r.cells.last().unwrap() as usize;
-                let Some(receiver) = r.terminal_receiver.map(|c| c as usize) else { continue; };
-                if receiver >= inp.w * inp.h || inp.land[receiver] { continue; }
+            // Deltas are terminal distributary networks, not decorative lines.
+            // The authoritative river remains the parent channel; the delta branches only after
+            // it reaches the coast. Each branch must cross the real land mask and terminate at a
+            // distinct ocean shoreline cell. This keeps the visual feature attached to hydrology
+            // while still allowing the many-to-one receiver graph to display a real bifurcation.
+            if r.mouth == Mouth::Ocean && r.cells.len() >= super::hydro::DELTA_MIN_CELLS {
                 let mouth_q = r.q.last().copied().unwrap_or(r.peak_discharge) as f64;
-                let q_ratio = (mouth_q / super::hydro::RIVER_Q).max(1.0);
-                let desired = if mouth_q >= super::hydro::RIVER_Q * 16.0 { 4 } else if mouth_q >= super::hydro::RIVER_Q * 8.0 { 3 } else { 2 };
-                let trunk_ft = 3.0 * inp.cell_ft;
-                let branch_len_cells = (3.0 + 0.35 * crate::core::sqrt(q_ratio)).clamp(3.0, 6.0);
-                let branch_len_ft = branch_len_cells * inp.cell_ft;
-                let spread_ft = (2.0 * branch_len_ft).max(inp.cell_ft);
-                let area_mi2 = (0.5 * branch_len_ft * spread_ft) / (5280.0 * 5280.0);
-                let mx = (receiver % w) as f64;
-                let my = (receiver / w) as f64;
-                let mut dx = mx - (mouth_cell % w) as f64;
-                let mut dy = my - (mouth_cell / w) as f64;
-                let norm = crate::core::sqrt(dx * dx + dy * dy).max(1e-9);
-                dx /= norm; dy /= norm;
-                let forward = libm::atan2(dy, dx);
-                let radius = branch_len_cells.ceil() as usize + 2;
-                let cx = receiver % w; let cy = receiver / w;
-                let mut targets: Vec<(f64, f64, f64)> = Vec::new();
-                for gy in cy.saturating_sub(radius)..=((cy + radius).min(inp.h.saturating_sub(1))) {
-                    for gx in cx.saturating_sub(radius)..=((cx + radius).min(w.saturating_sub(1))) {
-                        let k = gy * w + gx;
-                        if inp.land[k] || !neighbors(w, inp.h, k).any(|(nb, _)| inp.land[nb]) { continue; }
-                        let tx = gx as f64 * inp.cell_ft; let ty = gy as f64 * inp.cell_ft;
-                        let txd = tx - (mouth_cell % w) as f64 * inp.cell_ft;
-                        let tyd = ty - (mouth_cell / w) as f64 * inp.cell_ft;
-                        let d = crate::core::sqrt(txd * txd + tyd * tyd) / inp.cell_ft;
-                        if d < 1.5 || d > branch_len_cells * 1.6 { continue; }
-                        let ang = libm::atan2(tyd, txd);
-                        let mut da = ang - forward;
-                        while da > std::f64::consts::PI { da -= std::f64::consts::TAU; }
-                        while da < -std::f64::consts::PI { da += std::f64::consts::TAU; }
-                        if libm::cos(da) < -0.35 { continue; }
-                        targets.push((d * (0.85 + 0.15 * libm::cos(da).max(0.0)), tx, ty));
-                    }
-                }
-                targets.sort_by(|a,b| a.0.total_cmp(&b.0).then(a.2.total_cmp(&b.2)).then(a.1.total_cmp(&b.1)));
-                let angle_gap = |a: f64, b: f64| { let mut d=(a-b).abs(); while d>std::f64::consts::PI { d=std::f64::consts::TAU-d; } d };
-                let mut chosen: Vec<[f64;2]> = Vec::new();
-                for target in targets {
-                    if chosen.len() >= desired { break; }
-                    let ang = libm::atan2(target.2-(mouth_cell/w) as f64*inp.cell_ft, target.1-(mouth_cell%w) as f64*inp.cell_ft);
-                    if chosen.iter().all(|p| {
-                        let pa=libm::atan2(p[1]-(mouth_cell/w) as f64*inp.cell_ft, p[0]-(mouth_cell%w) as f64*inp.cell_ft);
-                        angle_gap(pa,ang)>=0.30
-                    }) { chosen.push([target.1,target.2]); }
-                }
-                let land_at = |x:f64,y:f64| {
-                    let gx=(x/inp.cell_ft).round().clamp(0.0,(w-1) as f64) as usize;
-                    let gy=(y/inp.cell_ft).round().clamp(0.0,(inp.h-1) as f64) as usize;
-                    inp.land[gy*w+gx]
-                };
-                let route_to_water = |target:[f64;2],seed:u64| -> Vec<[f64;2]> {
-                    let start=[(mouth_cell%w) as f64*inp.cell_ft,(mouth_cell/w) as f64*inp.cell_ft];
-                    let tx=target[0]-start[0]; let ty=target[1]-start[1];
-                    let dist=crate::core::sqrt(tx*tx+ty*ty).max(inp.cell_ft);
-                    let dir=libm::atan2(ty,tx);
-                    let side=if libm::sin(dir-forward)>=0.0 {1.0} else {-1.0};
-                    let curve=(0.04+0.06*crate::core::rng::unit(crate::core::rng::mix64(seed)))*side*dist;
-                    let c1=[start[0]+tx*0.42-ty*0.18+curve,start[1]+ty*0.42+tx*0.18+curve];
-                    let c2=[target[0]-tx*0.25,target[1]-ty*0.25];
-                    let steps=((dist/inp.cell_ft*2.0).round() as usize).clamp(8,18);
-                    let mut pts=Vec::with_capacity(steps+1); let mut prev_h=inp.height[mouth_cell];
-                    for i in 0..=steps {
-                        let t=i as f64/steps as f64; let u=1.0-t;
-                        let x=u*u*u*start[0]+3.0*u*u*t*c1[0]+3.0*u*t*t*c2[0]+t*t*t*target[0];
-                        let y=u*u*u*start[1]+3.0*u*u*t*c1[1]+3.0*u*t*t*c2[1]+t*t*t*target[1];
-                        if i<steps {
-                            if !land_at(x,y) { return Vec::new(); }
-                            let gx=(x/inp.cell_ft).round().clamp(0.0,(w-1) as f64) as usize;
-                            let gy=(y/inp.cell_ft).round().clamp(0.0,(inp.h-1) as f64) as usize;
-                            let hh=inp.height[gy*w+gx];
-                            if hh>prev_h+inp.cell_ft*0.08 { return Vec::new(); }
-                            prev_h=hh;
+                let delta_strength = (mouth_q / super::hydro::RIVER_Q).max(0.0);
+                let eligible = delta_strength >= 1.25
+                    && (r.order >= 2 || r.drainage_area_cells >= 48)
+                    && r.length_ft >= (super::hydro::DELTA_MIN_CELLS as f64 * inp.cell_ft);
+                if eligible {
+                    let mouth_cell = *r.cells.last().unwrap() as usize;
+                    if let Some(receiver) = r.terminal_receiver.map(|c| c as usize) {
+                        if receiver < inp.w * inp.h && !inp.land[receiver] {
+                            let desired = if delta_strength >= 8.0 { 4 } else if delta_strength >= 3.0 { 3 } else { 2 };
+                            if let Some(delta_paths) = build_delta_paths(inp, r, mouth_cell, receiver, desired) {
+                                if delta_paths.len() >= 2 {
+                                    let spread_ft = delta_paths.iter()
+                                        .flat_map(|p| p.iter())
+                                        .map(|p| {
+                                            let dx = p[0] - mouth_cell as f64 % w as f64 * inp.cell_ft;
+                                            let dy = p[1] - (mouth_cell / w) as f64 * inp.cell_ft;
+                                            crate::core::sqrt(dx * dx + dy * dy)
+                                        })
+                                        .fold(0.0, f64::max);
+                                    let area_mi2 = (spread_ft * spread_ft).max(inp.cell_ft * inp.cell_ft)
+                                        / (5280.0 * 5280.0);
+                                    let mx = (receiver % w) as f64;
+                                    let my = (receiver / w) as f64;
+                                    let dx = mx - (mouth_cell % w) as f64;
+                                    let dy = my - (mouth_cell / w) as f64;
+                                    let forward = libm::atan2(dy, dx);
+                                    let length_ft = delta_paths.iter()
+                                        .map(|p| {
+                                            p.windows(2).map(|q| {
+                                                let dx = q[1][0] - q[0][0];
+                                                let dy = q[1][1] - q[0][1];
+                                                crate::core::sqrt(dx * dx + dy * dy)
+                                            }).sum::<f64>()
+                                        })
+                                        .fold(0.0, f64::max);
+                                    let delta_id = self.push(
+                                        "delta",
+                                        NameKind::Delta,
+                                        mx,
+                                        my,
+                                        forward,
+                                        spread_ft.max(length_ft),
+                                        None,
+                                        Some(format!(
+                                            "delta of River {} | {} connected distributaries | area {:.1} sq mi | mouth discharge {:.0}",
+                                            r.source_cell, delta_paths.len(), area_mi2, mouth_q
+                                        )),
+                                    );
+                                    if let Some(feature) = self.out.features.iter_mut().find(|f| f.id == delta_id) {
+                                        feature.area_mi2 = Some(area_mi2);
+                                        feature.discharge_index = Some(mouth_q);
+                                        feature.length_mi = Some(length_ft / 5280.0);
+                                        feature.basin_id = Some(r.basin_id);
+                                        feature.delta_paths = Some(delta_paths);
+                                    }
+                                }
+                            }
                         }
-                        pts.push([x,y]);
-                    }
-                    pts
-                };
-                let seed=crate::core::rng::mix64(r.basin_id^(r.source_cell as u64).wrapping_mul(0x9e37_79b9));
-                let mut delta_paths=Vec::new();
-                for (i,target) in chosen.iter().enumerate() {
-                    let path=route_to_water(*target,seed^(i as u64+1)*0x85eb_ca6b);
-                    if path.len()>=3 { delta_paths.push(path); }
-                }
-                if delta_paths.len()>=2 {
-                    let length_ft=trunk_ft+branch_len_ft;
-                    let delta_id=self.push("delta",NameKind::Delta,mx,my,forward,spread_ft.max(length_ft),None,
-                        Some(format!("delta of River {} | {} connected distributaries | area {:.1} sq mi | mouth discharge {:.0}",r.source_cell,delta_paths.len(),area_mi2,mouth_q)));
-                    if let Some(feature)=self.out.features.iter_mut().find(|f| f.id==delta_id) {
-                        feature.area_mi2=Some(area_mi2); feature.discharge_index=Some(mouth_q);
-                        feature.length_mi=Some(length_ft/5280.0); feature.basin_id=Some(r.basin_id);
-                        feature.delta_paths=Some(delta_paths);
                     }
                 }
             }
@@ -835,6 +800,175 @@ fn upright(a: f64) -> f64 {
 }
 
 /// Chaikin corner cutting, keeping both endpoints; per-point values are interpolated.
+
+/// Build a small, deterministic distributary fan from a real ocean mouth.
+///
+/// The main receiver graph is single-flow by design, so distributaries are represented as a
+/// terminal overlay derived from that graph. They are nevertheless terrain-aware: every land
+/// segment is found by bounded A* and every branch ends on an actual ocean shoreline cell.
+/// Reused cells are penalized so branches share only the natural proximal trunk.
+fn build_delta_paths(
+    inp: &Inputs,
+    river: &super::hydro::River,
+    mouth: usize,
+    ocean: usize,
+    desired: usize,
+) -> Option<Vec<Vec<[f64; 2]>>> {
+    let (w, h) = (inp.w, inp.h);
+    let cell_ft = inp.cell_ft;
+    let mx = (mouth % w) as f64;
+    let my = (mouth / w) as f64;
+    let ox = (ocean % w) as f64;
+    let oy = (ocean / w) as f64;
+    let fx = ox - mx;
+    let fy = oy - my;
+    let fl = crate::core::sqrt(fx * fx + fy * fy).max(1e-6);
+    let fx = fx / fl;
+    let fy = fy / fl;
+    let radius = ((8.0 + 1.5 * crate::core::sqrt(
+        (river.q.last().copied().unwrap_or(river.peak_discharge) as f64
+            / super::hydro::RIVER_Q).max(1.0),
+    )) as usize).clamp(8, 16);
+
+    // Candidate ocean cells are true shoreline cells near the mouth, biased toward the
+    // downstream half-plane. We choose angularly separated outlets rather than nearest cells.
+    let mut targets = Vec::<(f64, usize)>::new();
+    for y in oy as isize - radius as isize..=oy as isize + radius as isize {
+        if y < 0 || y >= h as isize { continue; }
+        for x in ox as isize - radius as isize..=ox as isize + radius as isize {
+            if x < 0 || x >= w as isize { continue; }
+            let k = y as usize * w + x as usize;
+            if inp.land[k] || !neighbors(w, h, k).any(|(nb, _)| inp.land[nb]) { continue; }
+            let vx = x as f64 - mx;
+            let vy = y as f64 - my;
+            let d = crate::core::sqrt(vx * vx + vy * vy);
+            if d < 2.0 || d > radius as f64 { continue; }
+            let along = (vx * fx + vy * fy) / d;
+            if along < -0.15 { continue; }
+            let angle = libm::atan2(vy, vx);
+            let forward_angle = libm::atan2(fy, fx);
+            let mut da = angle - forward_angle;
+            while da > std::f64::consts::PI { da -= std::f64::consts::TAU; }
+            while da < -std::f64::consts::PI { da += std::f64::consts::TAU; }
+            // Prefer a moderately wide fan and penalize very distant shoreline cells.
+            let score = d + 2.5 * da.abs();
+            targets.push((score, k));
+        }
+    }
+    targets.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+
+    let mut chosen = Vec::<usize>::new();
+    for &(_, target) in &targets {
+        if chosen.len() >= desired { break; }
+        let tx = (target % w) as f64;
+        let ty = (target / w) as f64;
+        let ta = libm::atan2(ty - my, tx - mx);
+        let separated = chosen.iter().all(|&other| {
+            let oa = libm::atan2((other / w) as f64 - my, (other % w) as f64 - mx);
+            let mut d = (ta - oa).abs();
+            while d > std::f64::consts::PI { d = std::f64::consts::TAU - d; }
+            d >= 0.38
+        });
+        if separated { chosen.push(target); }
+    }
+    if chosen.len() < 2 { return None; }
+
+    let mut used = vec![false; w * h];
+    let mut paths = Vec::with_capacity(chosen.len());
+    for (branch, &target) in chosen.iter().enumerate() {
+        let mut goals = Vec::<usize>::new();
+        for (nb, _) in neighbors(w, h, target) {
+            if inp.land[nb] && inp.hydro.lake_of[nb] == super::hydro::NO_LAKE {
+                goals.push(nb);
+            }
+        }
+        goals.sort_unstable();
+        let mut best: Option<Vec<usize>> = None;
+        for goal in goals {
+            if let Some(path) = delta_route(inp, mouth, goal, &used, radius + 3) {
+                if best.as_ref().is_none_or(|b| path.len() < b.len()) { best = Some(path); }
+            }
+        }
+        let Some(path) = best else { continue; };
+        for (i, &cell) in path.iter().enumerate() {
+            // Keep a short shared trunk at the apex, but discourage parallel reuse farther out.
+            if i >= 2 { used[cell] = true; }
+        }
+        let mut points = path.iter().map(|&k| {
+            [(k % w) as f64 * cell_ft, (k / w) as f64 * cell_ft]
+        }).collect::<Vec<_>>();
+        points.push([(target % w) as f64 * cell_ft, (target / w) as f64 * cell_ft]);
+        // One light Chaikin pass softens grid corners without inventing a detached curve.
+        let weights = vec![1.0f32; points.len()];
+        let (smooth, _) = chaikin(&points, &weights, 1);
+        if smooth.len() >= 3 { paths.push(smooth); } else { paths.push(points); }
+    }
+    (paths.len() >= 2).then_some(paths)
+}
+
+fn delta_route(
+    inp: &Inputs,
+    start: usize,
+    goal: usize,
+    used: &[bool],
+    radius: usize,
+) -> Option<Vec<usize>> {
+    let (w, h) = (inp.w, inp.h);
+    let sx = start % w;
+    let sy = start / w;
+    let gx = goal % w;
+    let gy = goal / w;
+    let min_x = sx.min(gx).saturating_sub(2);
+    let max_x = (sx.max(gx) + 2).min(w.saturating_sub(1));
+    let min_y = sy.min(gy).saturating_sub(2);
+    let max_y = (sy.max(gy) + 2).min(h.saturating_sub(1));
+    let mut heap = BinaryHeap::<Reverse<(u64, u32)>>::new();
+    let mut dist = vec![u64::MAX; w * h];
+    let mut prev = vec![u32::MAX; w * h];
+    dist[start] = 0;
+    heap.push(Reverse((0, start as u32)));
+    while let Some(Reverse((_, cur_u))) = heap.pop() {
+        let cur = cur_u as usize;
+        if cur == goal { break; }
+        let cx = cur % w;
+        let cy = cur / w;
+        if cx < min_x || cx > max_x || cy < min_y || cy > max_y { continue; }
+        if ((cx as isize - sx as isize).abs().max((cy as isize - sy as isize) as isize)) as usize > radius { continue; }
+        let base = dist[cur];
+        if base == u64::MAX { continue; }
+        for (nb, diagonal) in neighbors(w, h, cur) {
+            if !inp.land[nb] || inp.hydro.lake_of[nb] != super::hydro::NO_LAKE { continue; }
+            let nx = nb % w;
+            let ny = nb / w;
+            if nx < min_x || nx > max_x || ny < min_y || ny > max_y { continue; }
+            let step = if diagonal > 1.0 { 141u64 } else { 100u64 };
+            let rise = (inp.height[nb] - inp.height[cur]).max(0.0);
+            if rise > inp.cell_ft * 0.12 { continue; }
+            let slope_cost = (rise / inp.cell_ft * 2400.0) as u64;
+            let reuse_cost = if used[nb] && nb != start { 9000 } else { 0 };
+            let g = base.saturating_add(step + slope_cost + reuse_cost);
+            if g >= dist[nb] { continue; }
+            dist[nb] = g;
+            prev[nb] = cur as u32;
+            let dx = gx as f64 - nx as f64;
+            let dy = gy as f64 - ny as f64;
+            let heuristic = (crate::core::sqrt(dx * dx + dy * dy) * 100.0) as u64;
+            heap.push(Reverse((g.saturating_add(heuristic), nb as u32)));
+        }
+    }
+    if dist[goal] == u64::MAX { return None; }
+    let mut path = Vec::new();
+    let mut cur = goal;
+    for _ in 0..(radius * radius + 8) {
+        path.push(cur);
+        if cur == start { path.reverse(); return Some(path); }
+        let p = prev[cur];
+        if p == u32::MAX { return None; }
+        cur = p as usize;
+    }
+    None
+}
+
 fn chaikin(pts: &[[f64; 2]], q: &[f32], iterations: usize) -> (Vec<[f64; 2]>, Vec<f32>) {
     let (mut p, mut v) = (pts.to_vec(), q.to_vec());
     for _ in 0..iterations {
