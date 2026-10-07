@@ -933,7 +933,7 @@ fn build_delta_paths(
         goals.sort_unstable();
         let mut best: Option<Vec<usize>> = None;
         for goal in goals {
-            if let Some(path) = delta_route(inp, branch_start, goal, &used, radius + 4, fx, fy) {
+            if let Some(path) = delta_route(inp, branch_start, goal, &used, &blocked, radius + 4, fx, fy) {
                 if path.len() >= 4 && best.as_ref().is_none_or(|b| path.len() < b.len()) {
                     best = Some(path);
                 }
