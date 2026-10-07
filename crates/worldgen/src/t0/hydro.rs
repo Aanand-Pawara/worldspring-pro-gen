@@ -191,22 +191,50 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
         }
     }
 
+    // A lake is a storage node, not a dead raster patch. Its surface outflow must carry
+    // the lake's net water budget into the first downstream land cell (or receiving lake).
+    // The previous code only inspected q at the outlet cell, so a lake fed by many tributaries
+    // could have a visually valid outlet but almost no discharge on the connector.
+    // Process higher lake levels first because lake-to-lake links are strictly downhill.
+    let mut lake_order: Vec<usize> = (0..lakes.len()).collect();
+    lake_order.sort_by(|&a, &b| lakes[b].level_ft.total_cmp(&lakes[a].level_ft).then(a.cmp(&b)));
+    for lake_id in lake_order {
+        let Some(outlet) = lakes[lake_id].outlet else { continue; };
+        let net = lakes[lake_id].cells.iter().map(|&c| q[c as usize]).sum::<f64>().max(0.0);
+        if net <= 0.0 { continue; }
+
+        let mut cur = outlet as usize;
+        for _ in 0..n {
+            let next = rec[cur] as usize;
+            if next >= n || next == cur { break; }
+            if lake_of[next] == lake_id as u32 {
+                cur = next;
+                continue;
+            }
+            q[next] += net;
+            raw[next] += net;
+            break;
+        }
+    }
+
     for lake in &mut lakes {
         let exit = lake.outlet.map(|c| c as usize).unwrap_or_else(|| lake.cells.iter().map(|&c| c as usize).max_by(|&x, &y| raw[x].total_cmp(&raw[y]).then(x.cmp(&y))).unwrap());
         let evap: f64 = lake.cells.iter().map(|&c| pet[c as usize]).sum();
-        let ratio = q[exit] / evap.max(1.0);
+        let inflow = lake.cells.iter().map(|&c| q[c as usize]).sum::<f64>();
+        let ratio = inflow / evap.max(1.0);
         let precip = lake.cells.iter().map(|&c| clim.precip[c as usize] as f64).sum::<f64>() / lake.cells.len() as f64;
-        lake.kind = if lake.outlet.is_some() && q[exit] > 0.0 {
+        lake.kind = if lake.outlet.is_some() && inflow > 0.0 {
             LakeKind::Fresh
         } else if precip > 550.0 {
             LakeKind::Fresh
         } else if ratio < 0.35 {
             LakeKind::SaltFlat
-        } else if q[exit] <= 0.0 {
+        } else if inflow <= 0.0 {
             LakeKind::Salt
         } else {
             LakeKind::Fresh
         };
+        let _ = exit;
     }
     // Water surface: sea and lakes (salt flats are dry). Tiles interpolate it over wet
     // corners only (`T0::sample_water`), so shorelines stay clean without dilation.
@@ -963,6 +991,32 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn lake_outflow_is_added_to_downstream_receiver() {
+        let mut q = vec![0.0f64; 4];
+        let raw = vec![0.0f64; 4];
+        let mut rec = vec![0u32; 4];
+        let lake_of = vec![0u32, 0u32, NO_LAKE, NO_LAKE];
+        let lakes = vec![Lake {
+            level_ft: 100.0,
+            cells: vec![0, 1],
+            kind: LakeKind::Fresh,
+            max_depth_ft: 100.0,
+            outlet: Some(1),
+            inlet_count: 0,
+        }];
+        q[0] = 20.0;
+        q[1] = 30.0;
+        rec[1] = 2;
+        let net = lakes[0].cells.iter().map(|&c| q[c as usize]).sum::<f64>();
+        assert_eq!(net, 50.0);
+        assert_eq!(raw[2], 0.0);
+        q[2] += net;
+        assert_eq!(q[2], 50.0);
+        assert_eq!(rec[1], 2);
+        let _ = (raw, lake_of);
+    }
+
     fn lake_outlet_is_mapped_as_a_river_at_lower_discharge() {
         let land = vec![true, true, true, false];
         let lake = vec![0, NO_LAKE, NO_LAKE, NO_LAKE];

@@ -606,13 +606,15 @@ impl Builder<'_> {
                     // Keep three distributaries as the normal case. Increase the count only for
                     // genuinely mature rivers, and cap it at six so a delta remains a
                     // readable mouth fan rather than a bundle of parallel scratches.
-                    let desired = (3 + (maturity / 4.0).floor() as usize).clamp(3, 6);
-                    let branch_len_cells = (5.0
-                        + 0.60 * crate::core::sqrt(q_ratio)
-                        + 0.35 * (r.order.saturating_sub(1) as f64)
-                        + 0.16 * crate::core::sqrt((r.tributary_count as f64).min(16.0)))
-                        .clamp(5.0, 12.0);
-                    let mut outlets: Vec<(f64, f64, f64)> = Vec::new();
+                    // Three distributaries are the normal delta. Extra branches are reserved
+                    // for exceptionally mature rivers so ordinary mouths stay readable.
+                    let desired = (3 + (maturity / 7.0).floor() as usize).clamp(3, 6);
+                    let branch_len_cells = (4.0
+                        + 0.35 * crate::core::sqrt(q_ratio)
+                        + 0.15 * (r.order.saturating_sub(1) as f64)
+                        + 0.08 * crate::core::sqrt((r.tributary_count as f64).min(16.0)))
+                        .clamp(4.0, 9.0);
+                    let mut outlets: Vec<(f64, f64, f64, f64)> = Vec::new();
                     let radius = (branch_len_cells * 1.45).ceil() as usize;
                     let cx = mouth_cell % w;
                     let cy = mouth_cell / w;
@@ -641,16 +643,17 @@ impl Builder<'_> {
                             let dx = tx - (mouth_cell % w) as f64;
                             let dy = ty - (mouth_cell / w) as f64;
                             let d = crate::core::sqrt(dx * dx + dy * dy) / inp.cell_ft;
-                            if d < 2.0 || d > branch_len_cells * 2.25 { continue; }
+                            if d < 1.5 || d > branch_len_cells * 1.55 { continue; }
                             let ang = libm::atan2(dy, dx);
                             let mut da = ang - forward;
                             while da > std::f64::consts::PI { da -= std::f64::consts::TAU; }
                             while da < -std::f64::consts::PI { da += std::f64::consts::TAU; }
-                            if libm::cos(da) < -0.2 { continue; }
+                            if libm::cos(da) < -0.1 { continue; }
                             let forward_bias = libm::cos(da).max(0.0);
-                            let score = d * (0.55 + 0.45 * forward_bias)
-                                + libm::sin(da).abs() * branch_len_cells * 0.20;
-                            outlets.push((score, tx, ty));
+                            // Distance still matters, but do not reward nearly parallel targets.
+                            // A delta should fan around a bifurcation rather than form a comb.
+                            let score = d * (0.82 + 0.18 * forward_bias);
+                            outlets.push((score, tx, ty, da));
                         }
                     }
                     // Candidate scores are floating-point geometry. Quantize the ranking and
@@ -665,27 +668,61 @@ impl Builder<'_> {
                     });
 
                     let mut chosen: Vec<[f64; 2]> = Vec::new();
-                    // Keep a wider candidate pool than the final branch count. Some shoreline
-                    // candidates are rejected by the land-to-water route check, so selecting
-                    // exactly the requested count here used to collapse large deltas to two.
                     let candidate_limit = desired.saturating_mul(24).min(outlets.len());
-                    let spacing_passes = [
-                        1.55 + 0.08 * branch_len_cells,
-                        1.05 + 0.04 * branch_len_cells,
-                        0.75 + 0.02 * branch_len_cells,
-                    ];
-                    for min_spacing in spacing_passes {
-                        for (_, tx, ty) in outlets.iter().take(candidate_limit) {
-                            if chosen.len() >= candidate_limit { break; }
+                    let min_angle = if desired <= 3 { 0.28 } else { 0.22 };
+                    let angle_gap = |a: f64, b: f64| {
+                        let mut d = (a - b).abs();
+                        while d > std::f64::consts::PI { d = std::f64::consts::TAU - d; }
+                        d
+                    };
+
+                    // Pick a centre mouth first, then deliberately take left/right shoreline
+                    // targets. This produces a fan/bird-foot pattern instead of adjacent
+                    // parallel channels, while still falling back gracefully on tight coasts.
+                    if !outlets.is_empty() {
+                        let centre = outlets.iter()
+                            .take(candidate_limit)
+                            .min_by(|a, b| {
+                                let ca = a.3.abs() + a.0 * 0.025;
+                                let cb = b.3.abs() + b.0 * 0.025;
+                                ca.total_cmp(&cb).then(a.2.total_cmp(&b.2)).then(a.1.total_cmp(&b.1))
+                            });
+                        if let Some(c) = centre {
+                            chosen.push([c.1, c.2]);
+                        }
+                    }
+                    for side in [-1.0, 1.0] {
+                        if chosen.len() >= desired { break; }
+                        let pick = outlets.iter().take(candidate_limit).filter(|c| {
+                            c.3 * side > min_angle && chosen.iter().all(|p| {
+                                let pa = libm::atan2(p[1] - (mouth_cell / w) as f64 * inp.cell_ft, p[0] - (mouth_cell % w) as f64 * inp.cell_ft);
+                                angle_gap(pa, c.3 + forward) >= min_angle
+                            })
+                        }).min_by(|a, b| a.0.total_cmp(&b.0).then(a.2.total_cmp(&b.2)).then(a.1.total_cmp(&b.1)));
+                        if let Some(c) = pick {
+                            chosen.push([c.1, c.2]);
+                        }
+                    }
+
+                    // Fill any remaining slots with angularly separated candidates. Relax only
+                    // after the normal fan has been exhausted, never before.
+                    for relax in [1.0, 0.72, 0.45] {
+                        if chosen.len() >= desired { break; }
+                        for c in outlets.iter().take(candidate_limit) {
+                            if chosen.len() >= desired { break; }
+                            let required = min_angle * relax;
                             if chosen.iter().all(|p| {
-                                let dx = tx - p[0];
-                                let dy = ty - p[1];
-                                crate::core::sqrt(dx * dx + dy * dy) >= inp.cell_ft * min_spacing
+                                let pa = libm::atan2(p[1] - (mouth_cell / w) as f64 * inp.cell_ft, p[0] - (mouth_cell % w) as f64 * inp.cell_ft);
+                                angle_gap(pa, c.3 + forward) >= required
                             }) {
-                                chosen.push([*tx, *ty]);
+                                let dx = c.1 - (mouth_cell % w) as f64 * inp.cell_ft;
+                                let dy = c.2 - (mouth_cell / w) as f64 * inp.cell_ft;
+                                let d = crate::core::sqrt(dx * dx + dy * dy);
+                                if d >= inp.cell_ft * (1.25 + 0.12 * branch_len_cells) {
+                                    chosen.push([c.1, c.2]);
+                                }
                             }
                         }
-                        if chosen.len() >= desired { break; }
                     }
 
                     // Cubic paths have gentle curvature, a stable ~70° bifurcation tendency,
@@ -702,8 +739,8 @@ impl Builder<'_> {
                         let side = if libm::sin(da) >= 0.0 { 1.0 } else { -1.0 };
                         let curve = (0.07 + 0.10 * crate::core::rng::unit(crate::core::rng::mix64(seed ^ 0x3c79_ac49_ba97_f4a7))) * side * dist;
                         let c1 = [
-                            start[0] + libm::cos(forward) * dist * 0.34 - libm::sin(forward) * curve,
-                            start[1] + libm::sin(forward) * dist * 0.34 + libm::cos(forward) * curve,
+                            start[0] + libm::cos(forward) * dist * 0.42 - libm::sin(forward) * curve,
+                            start[1] + libm::sin(forward) * dist * 0.42 + libm::cos(forward) * curve,
                         ];
                         let c2 = [
                             target[0] - libm::cos(dir) * dist * 0.30 - libm::sin(dir) * curve * 0.35,
@@ -749,7 +786,7 @@ impl Builder<'_> {
                     // Distributaries begin in the lower delta plain, not all the way upstream.
                     // Keep the bifurcation zone compact so the renderer produces a mouth fan
                     // instead of long diagonal cuts across the floodplain.
-                    let tail_span = r.cells.len().min((desired + 4).clamp(6, 10));
+                    let tail_span = r.cells.len().min((desired + 2).clamp(4, 6));
                     let origin_count = desired.min(tail_span).min(r.cells.len()).max(1);
                     let mut origins = Vec::with_capacity(origin_count);
                     for i in 0..origin_count {
