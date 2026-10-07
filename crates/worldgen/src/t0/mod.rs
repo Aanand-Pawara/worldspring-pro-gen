@@ -948,6 +948,23 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
                     }
                 })
                 .collect();
+            // Lake-fed rivers must visibly leave the lake itself, not begin on the first
+            // land cell downstream. Use the authoritative lake outlet cell as the first point.
+            if let Some(lake_id) = r.source_lake {
+                if let Some(&source) = r.cells.first() {
+                    let source = source as usize;
+                    if let Some((lake_cell, _)) = flood::neighbors(w, h, source)
+                        .find(|&(nb, _)| hydro.lake_of[nb] == lake_id && hydro.receiver[nb] as usize == source)
+                    {
+                        let p = [(lake_cell % w) as f64 * cell, (lake_cell / w) as f64 * cell];
+                        if pts.first().copied() != Some(p) {
+                            pts.insert(0, p);
+                            z.insert(0, hydro.lakes[lake_id as usize].level_ft as f32);
+                        }
+                    }
+                }
+            }
+
             // A tributary segment ends one cell before its parent segment's junction because
             // the raster reach is split at the confluence. Extend the tributary to that exact
             // receiver cell so both curves share one geometric junction.
