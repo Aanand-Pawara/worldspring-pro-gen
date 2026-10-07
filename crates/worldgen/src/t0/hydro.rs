@@ -198,6 +198,9 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
     // Compute each lake's actual water budget from local runoff, evaporation, and external
     // inflows. Summing q over lake cells double-counts water accumulated inside the same lake.
     let mut lake_net = vec![0.0f64; lakes.len()];
+    // Track external inflow separately from local precipitation/evaporation. A flow-through
+    // lake must not become a dead end merely because its static local water budget is negative.
+    let mut lake_inflow = vec![0.0f64; lakes.len()];
     for i in 0..n {
         if lake_of[i] != NO_LAKE {
             let p = clim.precip[i] as f64;
@@ -206,13 +209,17 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
         } else {
             let r = rec[i] as usize;
             if r < n && lake_of[r] != NO_LAKE {
-                lake_net[lake_of[r] as usize] += q[i];
+                let id = lake_of[r] as usize;
+                lake_net[id] += q[i];
+                lake_inflow[id] += q[i];
             }
         }
     }
     for &(k, v) in feed {
         if lake_of[k] != NO_LAKE {
-            lake_net[lake_of[k] as usize] += v;
+            let id = lake_of[k] as usize;
+            lake_net[id] += v;
+            lake_inflow[id] += v;
         }
     }
 
@@ -221,7 +228,7 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
     let had_outlet: Vec<bool> = lakes.iter().map(|lake| lake.outlet.is_some()).collect();
     connect_lakes_to_river_channels(
         w, h, land, &lake_of, &fl.filled, &q, river_threshold, &mut rec,
-        &mut lakes, &lake_net,
+        &mut lakes, &lake_net, &lake_inflow,
     );
 
     // Route every lake's net outflow through the complete receiver chain.
@@ -294,6 +301,7 @@ fn connect_lakes_to_river_channels(
     rec: &mut [u32],
     lakes: &mut [Lake],
     lake_net: &[f64],
+    lake_inflow: &[f64],
 ) {
     if lakes.is_empty() { return; }
     const MAX_CONNECT_CELLS: usize = 36;
@@ -314,7 +322,10 @@ fn connect_lakes_to_river_channels(
     }
 
     for lake_id in order {
-        if lakes[lake_id].outlet.is_some() || lake_net[lake_id] <= threshold * 0.02 || boundaries[lake_id].is_empty() { continue; }
+        if lakes[lake_id].outlet.is_some()
+            || (lake_net[lake_id] <= threshold * 0.02 && lake_inflow[lake_id] <= threshold * 0.02)
+            || boundaries[lake_id].is_empty()
+        { continue; }
         let Some((source_cell, path, target)) = lake_river_spill_path(
             w, h, land, lake_of, filled, q, rec, min_q, lakes[lake_id].level_ft,
             MAX_CONNECT_CELLS, &boundaries[lake_id],
@@ -925,11 +936,14 @@ fn recompute_final_discharge(
     let pet: Vec<f64> = clim.temp.iter().map(|&t| (350.0 + 55.0 * t as f64).max(0.0)).collect();
     let mut q = vec![0.0f64; n];
     let mut lake_net = vec![0.0f64; lakes.len()];
+    let mut lake_inflow = vec![0.0f64; lakes.len()];
 
     for &(cell, amount) in feed {
         if cell >= n { continue; }
         if lake_of[cell] != NO_LAKE {
-            lake_net[lake_of[cell] as usize] += amount;
+            let id = lake_of[cell] as usize;
+            lake_net[id] += amount;
+            lake_inflow[id] += amount;
         } else {
             q[cell] += amount;
         }
@@ -952,7 +966,9 @@ fn recompute_final_discharge(
         let r = rec[i] as usize;
         if r >= n || r == i || !land[r] { continue; }
         if lake_of[r] != NO_LAKE {
-            lake_net[lake_of[r] as usize] += q[i];
+            let id = lake_of[r] as usize;
+            lake_net[id] += q[i];
+            lake_inflow[id] += q[i];
         } else {
             q[r] += q[i];
         }
@@ -984,8 +1000,10 @@ fn recompute_final_discharge(
     }
 
     for lake_id in lake_order {
-        let net = lake_net[lake_id].max(0.0);
         let Some(outlet) = outlets[lake_id] else { continue; };
+        // Flow-through lakes represent long-term storage. Do not erase the incoming river
+        // because a static local precipitation/evaporation balance happens to be negative.
+        let net = lake_net[lake_id].max(lake_inflow[lake_id] * 0.25);
         if net <= 0.0 { continue; }
 
         let mut cur = outlet;
@@ -994,7 +1012,10 @@ fn recompute_final_discharge(
             if next >= n || next == cur || !land[next] { break; }
             if lake_of[next] != NO_LAKE {
                 let target = lake_of[next] as usize;
-                if target != lake_id { lake_net[target] += net; }
+                if target != lake_id {
+                    lake_net[target] += net;
+                    lake_inflow[target] += net;
+                }
                 break;
             }
             q[next] += net;
@@ -1683,6 +1704,18 @@ mod hydrology_regression_tests {
         let mut rec = vec![0, 1, 2, 3];
         repair_nearby_water_sinks(4, 1, &land, &lake, &filled, &mut rec, 3);
         assert_eq!(rec, vec![1, 2, 3, 3]);
+    }
+
+    #[test]
+    fn flow_through_lake_preserves_outflow_when_local_balance_is_negative() {
+        let land = vec![true, true, true, true, true, false];
+        let lake = vec![NO_LAKE, 0, 0, NO_LAKE, NO_LAKE, NO_LAKE];
+        let rec = vec![1, 2, 3, 4, 5, 5];
+        let order = vec![0, 1, 2, 3, 4];
+        let clim = Climate { temp: vec![20.0; 6], precip: vec![500.0; 6] };
+        let lakes = vec![Lake { level_ft: 100.0, cells: vec![1, 2], kind: LakeKind::Fresh, max_depth_ft: 100.0, outlet: Some(2), inlet_count: 1 }];
+        let (q, _) = recompute_final_discharge(6, 1, &land, &lake, &rec, &order, &clim, &[(0, 100_000.0)], &lakes);
+        assert!(q[3] >= 25_000.0);
     }
 
     #[test]

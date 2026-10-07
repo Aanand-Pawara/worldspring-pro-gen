@@ -827,58 +827,65 @@ fn build_delta_paths(
     let my = (mouth / w) as f64;
     let ox = (ocean % w) as f64;
     let oy = (ocean / w) as f64;
-    // The delta must continue the river's actual terminal bearing, not merely the vector
-    // to an arbitrarily chosen ocean cell. The previous->mouth tangent is the authoritative
-    // local flow direction; the ocean receiver is only used when the tangent is unavailable or
-    // clearly disagrees with the terminal water direction.
+
+    // A delta is a low-gradient depositional continuation of the river, not a radial fan
+    // centered on an arbitrary ocean receiver. The terminal river bearing is authoritative.
     let (mut fx, mut fy) = if river.cells.len() >= 2 {
         let prev = river.cells[river.cells.len() - 2] as usize;
         (mx - (prev % w) as f64, my - (prev / w) as f64)
     } else {
         (ox - mx, oy - my)
     };
-    let tangent_len = crate::core::sqrt(fx * fx + fy * fy).max(1e-6);
-    fx /= tangent_len;
-    fy /= tangent_len;
+    let fl = crate::core::sqrt(fx * fx + fy * fy).max(1e-6);
+    fx /= fl;
+    fy /= fl;
 
-    let ocean_dx = ox - mx;
-    let ocean_dy = oy - my;
-    let ocean_len = crate::core::sqrt(ocean_dx * ocean_dx + ocean_dy * ocean_dy).max(1e-6);
-    let ocean_fx = ocean_dx / ocean_len;
-    let ocean_fy = ocean_dy / ocean_len;
-    // If the terminal receiver lies materially behind the river's local flow bearing, use the
-    // real receiver direction rather than generating a fan that visibly folds upstream.
-    if fx * ocean_fx + fy * ocean_fy < 0.20 {
-        fx = ocean_fx;
-        fy = ocean_fy;
+    let odx = ox - mx;
+    let ody = oy - my;
+    let olen = crate::core::sqrt(odx * odx + ody * ody).max(1e-6);
+    let ofx = odx / olen;
+    let ofy = ody / olen;
+    if fx * ofx + fy * ofy < 0.15 {
+        fx = ofx;
+        fy = ofy;
     }
-    let radius = ((8.0 + 1.5 * crate::core::sqrt(
-        (river.q.last().copied().unwrap_or(river.peak_discharge) as f64
-            / super::hydro::RIVER_Q).max(1.0),
-    )) as usize).clamp(8, 16);
 
-    // Candidate ocean cells are true shoreline cells near the mouth, biased toward the
-    // downstream half-plane. We choose angularly separated outlets rather than nearest cells.
+    let mouth_z = inp.height[mouth];
+    let strength = (river.q.last().copied().unwrap_or(river.peak_discharge) as f64
+        / super::hydro::RIVER_Q).max(1.0);
+    let radius = (10.0 + 2.2 * crate::core::sqrt(strength)).round() as usize;
+    let radius = radius.clamp(10, 22);
+
+    // Choose actual shoreline targets around the river mouth. This removes the old failure
+    // mode where one arbitrary ocean cell dictated the entire fan's shape.
     let mut targets = Vec::<(f64, usize)>::new();
-    for y in oy as isize - radius as isize..=oy as isize + radius as isize {
+    for y in my as isize - radius as isize..=my as isize + radius as isize {
         if y < 0 || y >= h as isize { continue; }
-        for x in ox as isize - radius as isize..=ox as isize + radius as isize {
+        for x in mx as isize - radius as isize..=mx as isize + radius as isize {
             if x < 0 || x >= w as isize { continue; }
             let k = y as usize * w + x as usize;
             if inp.land[k] || !neighbors(w, h, k).any(|(nb, _)| inp.land[nb]) { continue; }
             let vx = x as f64 - mx;
             let vy = y as f64 - my;
             let d = crate::core::sqrt(vx * vx + vy * vy);
-            if d < 2.0 || d > radius as f64 { continue; }
+            if d < 4.0 || d > radius as f64 { continue; }
             let along = (vx * fx + vy * fy) / d;
-            if along < -0.15 { continue; }
-            let angle = libm::atan2(vy, vx);
+            if along < 0.20 { continue; }
             let forward_angle = libm::atan2(fy, fx);
-            let mut da = angle - forward_angle;
+            let mut da = libm::atan2(vy, vx) - forward_angle;
             while da > std::f64::consts::PI { da -= std::f64::consts::TAU; }
             while da < -std::f64::consts::PI { da += std::f64::consts::TAU; }
-            // Prefer a moderately wide fan and penalize very distant shoreline cells.
-            let score = d + 2.5 * da.abs();
+
+            let coast_z = neighbors(w, h, k)
+                .filter(|(nb, _)| inp.land[*nb] && inp.hydro.lake_of[*nb] == super::hydro::NO_LAKE)
+                .map(|(nb, _)| inp.height[nb])
+                .fold(f64::INFINITY, f64::min);
+            let grade = ((mouth_z - coast_z).max(0.0)) / (d * cell_ft).max(cell_ft);
+            if !grade.is_finite() || grade > super::hydro::DELTA_MAX_GRADE { continue; }
+
+            // Compact lobate fan: downstream targets are preferred, but branch separation
+            // remains strong enough to create visible interdistributary space.
+            let score = d + 2.2 * da.abs() * radius as f64 - 3.0 * along * radius as f64;
             targets.push((score, k));
         }
     }
@@ -887,22 +894,38 @@ fn build_delta_paths(
     let mut chosen = Vec::<usize>::new();
     for &(_, target) in &targets {
         if chosen.len() >= desired { break; }
-        let tx = (target % w) as f64;
-        let ty = (target / w) as f64;
-        let ta = libm::atan2(ty - my, tx - mx);
+        let ta = libm::atan2((target / w) as f64 - my, (target % w) as f64 - mx);
         let separated = chosen.iter().all(|&other| {
             let oa = libm::atan2((other / w) as f64 - my, (other % w) as f64 - mx);
             let mut d = (ta - oa).abs();
             while d > std::f64::consts::PI { d = std::f64::consts::TAU - d; }
-            d >= 0.38
+            d >= 0.30
         });
         if separated { chosen.push(target); }
     }
     if chosen.len() < 2 { return None; }
 
+    // Real deltas share a lower-delta trunk before bifurcating.
+    let mut branch_start = mouth;
+    for _ in 0..3 {
+        let mut best: Option<(f64, usize)> = None;
+        for (nb, _) in neighbors(w, h, branch_start) {
+            if !inp.land[nb] || inp.hydro.lake_of[nb] != super::hydro::NO_LAKE { continue; }
+            let dx = (nb % w) as f64 - mx;
+            let dy = (nb / w) as f64 - my;
+            let forward = dx * fx + dy * fy;
+            if forward <= 0.0 { continue; }
+            let rise = (inp.height[nb] - inp.height[branch_start]).max(0.0) / cell_ft;
+            let score = rise * 8.0 - forward * 3.0;
+            if best.is_none_or(|b| score < b.0) { best = Some((score, nb)); }
+        }
+        let Some((_, next)) = best else { break; };
+        branch_start = next;
+    }
+
     let mut used = vec![false; w * h];
     let mut paths = Vec::with_capacity(chosen.len());
-    for &target in chosen.iter() {
+    for &target in &chosen {
         let mut goals = Vec::<usize>::new();
         for (nb, _) in neighbors(w, h, target) {
             if inp.land[nb] && inp.hydro.lake_of[nb] == super::hydro::NO_LAKE {
@@ -912,20 +935,24 @@ fn build_delta_paths(
         goals.sort_unstable();
         let mut best: Option<Vec<usize>> = None;
         for goal in goals {
-            if let Some(path) = delta_route(inp, mouth, goal, &used, radius + 3, fx, fy) {
-                if best.as_ref().is_none_or(|b| path.len() < b.len()) { best = Some(path); }
+            if let Some(path) = delta_route(inp, branch_start, goal, &used, radius + 4, fx, fy) {
+                if path.len() >= 4 && best.as_ref().is_none_or(|b| path.len() < b.len()) {
+                    best = Some(path);
+                }
             }
         }
         let Some(path) = best else { continue; };
-        for (i, &cell) in path.iter().enumerate() {
-            // Keep a short shared trunk at the apex, but discourage parallel reuse farther out.
-            if i >= 2 { used[cell] = true; }
+
+        // Reserve a small corridor around each distributary, not just its center cells.
+        for &cell in &path {
+            used[cell] = true;
+            for (nb, _) in neighbors(w, h, cell) { used[nb] = true; }
         }
+
         let mut points = path.iter().map(|&k| {
             [(k % w) as f64 * cell_ft, (k / w) as f64 * cell_ft]
         }).collect::<Vec<_>>();
         points.push([(target % w) as f64 * cell_ft, (target / w) as f64 * cell_ft]);
-        // One light Chaikin pass softens grid corners without inventing a detached curve.
         let weights = vec![1.0f32; points.len()];
         let (smooth, _) = chaikin(&points, &weights, 1);
         if smooth.len() >= 3 { paths.push(smooth); } else { paths.push(points); }
@@ -986,9 +1013,9 @@ fn delta_route(
             if next_projection + 0.35 < cur_projection { continue; }
 
             let forward_step = (nx as f64 - cx as f64) * flow_x + (ny as f64 - cy as f64) * flow_y;
-            let direction_cost = if forward_step < 0.05 { 500u64 } else { 0u64 };
+            let direction_cost = if forward_step < 0.05 { 1_500u64 } else { 0u64 };
             let slope_cost = (rise / inp.cell_ft * 2400.0) as u64;
-            let reuse_cost = if used[nb] && nb != start { 9000 } else { 0 };
+            let reuse_cost = if used[nb] && nb != start { 50_000 } else { 0 };
             let g = base.saturating_add(step + slope_cost + reuse_cost + direction_cost);
             if g >= dist[nb] { continue; }
             dist[nb] = g;
