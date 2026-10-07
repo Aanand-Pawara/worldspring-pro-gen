@@ -87,6 +87,35 @@ fn rivers_flow_downhill() {
     }
 }
 
+
+/// Full hydrology contract across several deterministic seeds. This intentionally checks the
+/// topology/metadata boundary rather than pixel output, catching "looks connected" rivers that
+/// disagree with the receiver graph before they become UI/rendering bugs.
+#[test]
+fn hydrology_integrity_multi_seed() {
+    for seed in [1u32, 3, 7, 11, 42, 99] {
+        let world = World::from_json(&world_json(seed)).unwrap();
+        let t0 = worldgen::t0::T0::generate(&world);
+        let extra = t0.extra.as_ref().unwrap();
+        let hydro = &extra.hydro;
+        let land: Vec<bool> = t0.height.data.iter()
+            .map(|&v| v as f64 > world.params().sea_level_ft)
+            .collect();
+        assert!(
+            worldgen::t0::hydro::validate_hydrology(
+                t0.height.w, t0.height.h, &land, &hydro.lake_of, &hydro.receiver,
+                &hydro.lakes, &hydro.rivers, &hydro.water,
+            ),
+            "seed {seed}: hydrology integrity failed"
+        );
+        for river in &hydro.rivers {
+            assert!(river.cells.len() >= 1, "seed {seed}: empty river");
+            assert_eq!(river.source_cell, river.cells[0], "seed {seed}: invalid river source");
+            assert!(river.peak_discharge >= 0.0 && river.peak_discharge.is_finite(), "seed {seed}: invalid discharge");
+        }
+    }
+}
+
 /// A point on the biggest river (by discharge), mid-course: seams and consistency are
 /// checked where rivers carve, not just on open ground.
 fn big_river_point(ex: &Executor) -> (f64, f64) {
