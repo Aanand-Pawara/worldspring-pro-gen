@@ -620,14 +620,14 @@ impl Builder<'_> {
             if r.mouth == Mouth::Ocean && r.cells.len() >= super::hydro::DELTA_MIN_CELLS {
                 let mouth_q = r.q.last().copied().unwrap_or(r.peak_discharge) as f64;
                 let delta_strength = (mouth_q / super::hydro::RIVER_Q).max(0.0);
-                let eligible = delta_strength >= 1.25
-                    && (r.order >= 2 || r.drainage_area_cells >= 48)
+                let eligible = delta_strength >= 0.90
+                    && (r.order >= 2 || r.drainage_area_cells >= 32 || r.tributary_count >= 1)
                     && r.length_ft >= (super::hydro::DELTA_MIN_CELLS as f64 * inp.cell_ft);
                 if eligible {
                     let mouth_cell = *r.cells.last().unwrap() as usize;
                     if let Some(receiver) = r.terminal_receiver.map(|c| c as usize) {
                         if receiver < inp.w * inp.h && !inp.land[receiver] {
-                            let desired = if delta_strength >= 6.0 { 3 } else { 2 };
+                            let desired = if delta_strength >= 3.0 { 3 } else { 2 };
                             if let Some(delta_paths) = build_delta_paths(inp, r, mouth_cell, receiver, desired) {
                                 if delta_paths.len() >= 2 {
                                     let spread_ft = delta_paths.iter()
@@ -957,10 +957,10 @@ fn build_delta_paths(
     let strength = (river.q.last().copied().unwrap_or(river.peak_discharge) as f64
         / super::hydro::RIVER_Q).max(1.0);
 
-    // Keep the delta compact relative to the parent channel. A broad fan with long fingers
-    // reads as a cracked river rather than a delta, especially on generated coastlines.
-    let radius = (11.0 + 2.0 * crate::core::sqrt(strength)).round() as usize;
-    let radius = radius.clamp(11, 23);
+    // Keep the delta compact. On the coarse T0 grid a huge fan quickly becomes a
+    // collection of scratch lines instead of a readable distributary mouth.
+    let radius = (7.0 + 1.8 * crate::core::sqrt(strength)).round() as usize;
+    let radius = radius.clamp(7, 16);
 
     // Existing rivers are hard obstacles. The parent is blocked too, except for the apex.
     // This preserves the hydrology/feature separation without allowing a branch to crawl
@@ -986,12 +986,12 @@ fn build_delta_paths(
     // A river-dominated delta is a small distributary network: several channels share
     // the proximal trunk, then separate around mouth bars into a fan of unequal outlets.
     // Keep this deliberately small so generated maps get morphology, not a bundle of scratches.
-    let branch_count = if strength >= 5.0 { 5 } else { 4 };
+    let branch_count = _desired.clamp(2, 3);
     let mut targets = Vec::<(f64, f64, usize)>::new();
-    let target_angles: &[f64] = if branch_count == 5 {
-        &[-0.95_f64, -0.48, 0.0, 0.48, 0.95]
+    let target_angles: &[f64] = if branch_count == 3 {
+        &[-0.62_f64, 0.0, 0.62]
     } else {
-        &[-0.82_f64, -0.30, 0.30, 0.82]
+        &[-0.48_f64, 0.48]
     };
     let target_radius = radius as f64 * 0.82;
 
@@ -1074,7 +1074,7 @@ fn build_delta_paths(
             chosen.push(target);
         }
     }
-    if chosen.len() < 3 {
+    if chosen.len() < 2 {
         return None;
     }
 
@@ -1104,7 +1104,7 @@ fn build_delta_paths(
                 goal,
                 &used,
                 &blocked,
-                radius + 7,
+                radius + 5,
                 fx,
                 fy,
             ) {

@@ -287,6 +287,7 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
     let basin_id = assign_basin_ids(w, h, land, &lake_of, &rec);
     let rivers = extract_rivers(w, h, cell_ft, land, &lake_of, &rec, &q, &flow_accumulation, &basin_id, river_threshold, &lakes);
     add_headwater_ponds(w, h, land, &lake_of, height, &rivers, &mut water);
+    shape_headwater_terrain(w, h, land, &lake_of, height, &rivers);
     debug_assert!(validate_hydrology(
         w, h, land, &lake_of, &rec, &lakes, &rivers, &water,
     ));
@@ -388,6 +389,90 @@ fn add_headwater_ponds(
 
         for cell in pond {
             water[cell] = water[cell].max(level as f32);
+        }
+    }
+}
+
+/// Give non-lake headwaters a shallow, terrain-consistent source basin. The water surface is
+/// already established by add_headwater_ponds; this pass only shapes the ground beneath it.
+/// The cut is capped by the actual first downstream drop so the authoritative receiver edge
+/// never becomes visually uphill.
+fn shape_headwater_terrain(
+    w: usize,
+    h: usize,
+    land: &[bool],
+    lake_of: &[u32],
+    height: &mut [f64],
+    rivers: &[River],
+) {
+    const RADIUS: f64 = 2.6;
+    const MIN_RIM_FT: f64 = 3.0;
+    const MAX_CUT_FT: f64 = 24.0;
+
+    for river in rivers {
+        if river.source_lake.is_some() || river.cells.len() < 2 {
+            continue;
+        }
+        let source = river.source_cell as usize;
+        let downstream = river.cells[1] as usize;
+        if source >= height.len() || downstream >= height.len()
+            || !land[source] || lake_of[source] != NO_LAKE
+            || !land[downstream] || lake_of[downstream] != NO_LAKE
+        {
+            continue;
+        }
+
+        let source_z = height[source];
+        let downstream_z = height[downstream];
+        let available_cut = (source_z - downstream_z - MIN_RIM_FT).max(0.0);
+        let max_cut = available_cut.min(MAX_CUT_FT);
+        if max_cut <= 0.5 {
+            continue;
+        }
+
+        let sx = source % w;
+        let sy = source / w;
+        let radius_cells = RADIUS.ceil() as usize;
+        let min_x = sx.saturating_sub(radius_cells);
+        let min_y = sy.saturating_sub(radius_cells);
+        let max_x = (sx + radius_cells + 1).min(w);
+        let max_y = (sy + radius_cells + 1).min(h);
+        if min_x >= max_x || min_y >= max_y {
+            continue;
+        }
+
+        let dx = (downstream % w) as f64 - sx as f64;
+        let dy = (downstream / w) as f64 - sy as f64;
+        let dl = crate::core::sqrt(dx * dx + dy * dy).max(1.0);
+        let ux = dx / dl;
+        let uy = dy / dl;
+
+        for y in min_y..max_y {
+            for x in min_x..max_x {
+                let cell = y * w + x;
+                if !land[cell] || lake_of[cell] != NO_LAKE {
+                    continue;
+                }
+                let px = x as f64 - sx as f64;
+                let py = y as f64 - sy as f64;
+                let d = crate::core::sqrt(px * px + py * py);
+                if d > RADIUS {
+                    continue;
+                }
+
+                let along = px * ux + py * uy;
+                let cross = crate::core::fabs(px * uy - py * ux);
+                let outlet_guard = if along > 0.4 && cross < 1.15 { 0.35 } else { 1.0 };
+                let t = (1.0 - d / RADIUS).clamp(0.0, 1.0);
+                let bowl = t * t * (3.0 - 2.0 * t);
+                let cut = max_cut * bowl * outlet_guard;
+                if cut <= 0.0 {
+                    continue;
+                }
+
+                let floor = downstream_z + MIN_RIM_FT;
+                height[cell] = height[cell].min((source_z - cut).max(floor));
+            }
         }
     }
 }
