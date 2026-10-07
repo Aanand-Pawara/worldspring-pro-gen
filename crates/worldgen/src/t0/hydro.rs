@@ -1458,7 +1458,7 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
     chains
 }
 
-fn validate_river_network(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32], rivers: &[Ri/// Validate the complete hydrology contract after topology, river extraction and source-water
+/// Validate the complete hydrology contract after topology, river extraction and source-water
 /// rendering have all finished. This is debug/test-only in normal generation, so the checks can
 /// be deliberately strict without adding release-time traversal cost.
 pub fn validate_hydrology(
@@ -1472,113 +1472,63 @@ pub fn validate_hydrology(
     water: &[f32],
 ) -> bool {
     let n = w * h;
-    if land.len() != n || lake_of.len() != n || rec.len() != n || water.len() != n {
-        return false;
-    }
-    if !validate_river_network(w, h, land, lake_of, rec, rivers) {
-        return false;
-    }
+    if land.len() != n || lake_of.len() != n || rec.len() != n || water.len() != n { return false; }
+    if !validate_river_network(w, h, land, lake_of, rec, rivers) { return false; }
 
-    // Every mapped lake outlet must leave that lake through a real receiver edge.
     for (lake_id, lake) in lakes.iter().enumerate() {
         if lake.cells.is_empty() || lake.cells.iter().any(|&c| {
             let c = c as usize;
             c >= n || !land[c] || lake_of[c] != lake_id as u32
-        }) {
-            return false;
-        }
+        }) { return false; }
         if let Some(outlet) = lake.outlet {
             let outlet = outlet as usize;
-            if outlet >= n || lake_of[outlet] != lake_id as u32 {
-                return false;
-            }
-            let next = rec[outlet] as usize;
-            if next >= n || next == outlet {
-                return false;
-            }
-            if lake_of[next] == lake_id as u32 {
+            let next = if outlet < n { rec[outlet] as usize } else { n };
+            if outlet >= n || lake_of[outlet] != lake_id as u32 || next >= n || next == outlet || lake_of[next] == lake_id as u32 {
                 return false;
             }
         }
     }
 
-    // Parent/child hierarchy is a tree of channel chains, never a loop or backwards link.
     let mut child_counts = vec![0u16; rivers.len()];
     for (river_id, river) in rivers.iter().enumerate() {
         if let Some(parent) = river.into {
-            if parent >= rivers.len() || parent == river_id {
-                return false;
-            }
+            if parent >= rivers.len() || parent == river_id || river.order > rivers[parent].order { return false; }
             child_counts[parent] = child_counts[parent].saturating_add(1);
-            if river.order > rivers[parent].order {
-                return false;
-            }
         }
         let mut seen_steps = 0usize;
         let mut cur = river_id;
         while let Some(parent) = rivers[cur].into {
             seen_steps += 1;
-            if seen_steps > rivers.len() || parent >= rivers.len() {
-                return false;
-            }
+            if seen_steps > rivers.len() || parent >= rivers.len() { return false; }
             cur = parent;
         }
     }
-
-    // A confluence that combines two or more equal-order tributaries must raise Strahler order.
     for (parent_id, &count) in child_counts.iter().enumerate() {
-        if count < 2 {
-            continue;
-        }
-        let max_child = rivers.iter()
-            .filter(|r| r.into == Some(parent_id))
-            .map(|r| r.order)
-            .max()
-            .unwrap_or(0);
-        let equal = rivers.iter()
-            .filter(|r| r.into == Some(parent_id) && r.order == max_child)
-            .count();
-        if equal >= 2 && rivers[parent_id].order < max_child.saturating_add(1) {
-            return false;
-        }
+        if count < 2 { continue; }
+        let max_child = rivers.iter().filter(|r| r.into == Some(parent_id)).map(|r| r.order).max().unwrap_or(0);
+        let equal = rivers.iter().filter(|r| r.into == Some(parent_id) && r.order == max_child).count();
+        if equal >= 2 && rivers[parent_id].order < max_child.saturating_add(1) { return false; }
     }
 
-    // Lake-fed sources must actually leave their named lake. Ocean/lake mouths must point at
-    // the receiving water cell, while confluences must point at the parent junction.
     for river in rivers {
         let source = river.source_cell as usize;
         if let Some(lake_id) = river.source_lake {
-            if lake_id as usize >= lakes.len() || source >= n || !land[source] {
-                return false;
-            }
-            let connected = neighbors(w, h, source).any(|(nb, _)| {
-                lake_of[nb] == lake_id && rec[nb] as usize == source
-            });
-            if !connected {
-                return false;
-            }
-        } else {
-            // A rendered headwater pond must cover the source cell. It is intentionally not
-            // added to lake_of because it is a visual/source-water feature, not a classified lake.
-            if source >= n || water[source] <= DRY {
-                return false;
-            }
+            if lake_id as usize >= lakes.len() || source >= n || !land[source] { return false; }
+            if !neighbors(w, h, source).any(|(nb, _)| lake_of[nb] == lake_id && rec[nb] as usize == source) { return false; }
+        } else if source >= n || water[source] <= DRY {
+            return false;
         }
 
         let last = *river.cells.last().unwrap() as usize;
         if let Some(terminal) = river.terminal_receiver {
             let terminal = terminal as usize;
-            if terminal >= n || rec[last] as usize != terminal {
-                return false;
-            }
+            if terminal >= n || rec[last] as usize != terminal { return false; }
             match river.mouth {
                 Mouth::Ocean if land[terminal] => return false,
                 Mouth::Lake if lake_of[terminal] == NO_LAKE => return false,
                 Mouth::Confluence => {
                     let Some(parent) = river.into else { return false; };
-                    if !rivers[parent].cells.contains(&(terminal as u32)) {
-                        return false;
-                    }
+                    if !rivers[parent].cells.contains(&(terminal as u32)) { return false; }
                 }
                 Mouth::Dry | Mouth::Ocean | Mouth::Lake => {}
             }
@@ -1586,10 +1536,10 @@ pub fn validate_hydrology(
             return false;
         }
     }
-
     true
 }
 
+fn validate_river_network(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32], rivers: &[River]) -> bool {
     let n = w * h;
     for river in rivers {
         if river.cells.is_empty() || river.cells.len() != river.q.len() || river.source_cell != river.cells[0] { return false; }
