@@ -574,7 +574,7 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
     let is_seed = |i: usize| {
         land[i]
             && lake_of[i] == NO_LAKE
-            && ((lake_feed[i] && q[i] >= threshold * 0.12)
+            && ((lake_feed[i] && q[i] >= threshold * 0.04)
                 || (q[i] >= threshold && !upstream_above_threshold[i]))
     };
     let mut channel = vec![false; n];
@@ -960,6 +960,27 @@ mod tests {
         assert_eq!(path.2, 57);
         assert!(!path.1.is_empty());
         assert!(path.1.iter().all(|&c| lake[c as usize] == NO_LAKE));
+    }
+
+    #[test]
+    fn lake_outlet_is_mapped_as_a_river_at_lower_discharge() {
+        let land = vec![true, true, true, false];
+        let lake = vec![0, NO_LAKE, NO_LAKE, NO_LAKE];
+        let rec = vec![0, 2, 3, 3];
+        let q = vec![5_000.0, 5_000.0, 5_000.0, 0.0];
+        let acc = vec![1, 2, 3, 0];
+        let basin = vec![0x1_0000_0000, 0x3_0000_0003, 0x3_0000_0003, 0];
+        let lakes = vec![Lake {
+            level_ft: 100.0,
+            cells: vec![0],
+            kind: LakeKind::Fresh,
+            max_depth_ft: 100.0,
+            outlet: Some(0),
+            inlet_count: 0,
+        }];
+        let rivers = extract_rivers(4, 1, 1.0, &land, &lake, &rec, &q, &acc, &basin, 90_000.0, &lakes);
+        assert_eq!(rivers.len(), 1);
+        assert_eq!(rivers[0].source_lake, Some(0));
     }
 
     #[test]

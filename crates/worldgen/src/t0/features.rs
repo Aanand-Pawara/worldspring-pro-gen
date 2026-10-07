@@ -607,13 +607,13 @@ impl Builder<'_> {
                     // toward nine as discharge, drainage area, order and length mature.
                     let desired = (3.0 + maturity * 1.15).round() as usize;
                     let desired = desired.clamp(3, 9);
-                    let branch_len_cells = (5.5
-                        + 0.85 * crate::core::sqrt(q_ratio)
-                        + 0.45 * (r.order.saturating_sub(1) as f64)
-                        + 0.20 * crate::core::sqrt((r.tributary_count as f64).min(16.0)))
-                        .clamp(6.0, 16.0);
+                    let branch_len_cells = (5.0
+                        + 0.60 * crate::core::sqrt(q_ratio)
+                        + 0.35 * (r.order.saturating_sub(1) as f64)
+                        + 0.16 * crate::core::sqrt((r.tributary_count as f64).min(16.0)))
+                        .clamp(5.0, 12.0);
                     let mut outlets: Vec<(f64, f64, f64)> = Vec::new();
-                    let radius = (branch_len_cells * 2.25).ceil() as usize;
+                    let radius = (branch_len_cells * 1.45).ceil() as usize;
                     let cx = mouth_cell % w;
                     let cy = mouth_cell / w;
                     let x0 = cx.saturating_sub(radius);
@@ -647,7 +647,9 @@ impl Builder<'_> {
                             while da > std::f64::consts::PI { da -= std::f64::consts::TAU; }
                             while da < -std::f64::consts::PI { da += std::f64::consts::TAU; }
                             if libm::cos(da) < -0.2 { continue; }
-                            let score = d * (0.65 + 0.35 * libm::cos(da)) + libm::sin(da).abs() * branch_len_cells * 0.35;
+                            let forward_bias = libm::cos(da).max(0.0);
+                            let score = d * (0.55 + 0.45 * forward_bias)
+                                + libm::sin(da).abs() * branch_len_cells * 0.20;
                             outlets.push((score, tx, ty));
                         }
                     }
@@ -744,14 +746,17 @@ impl Builder<'_> {
                     let mut delta_paths: Vec<Vec<[f64; 2]>> = Vec::new();
                     // Search targets for each progressively upstream origin. This prevents a
                     // couple of bad shoreline candidates from collapsing every delta to two arms.
-                    let tail_span = r.cells.len().min((desired * 2 + 4).max(8));
-                    let origin_count = desired.min(r.cells.len()).max(1);
+                    // Distributaries begin in the lower delta plain, not all the way upstream.
+                    // Keep the bifurcation zone compact so the renderer produces a mouth fan
+                    // instead of long diagonal cuts across the floodplain.
+                    let tail_span = r.cells.len().min((desired / 2 + 3).clamp(4, 7));
+                    let origin_count = desired.min(4).min(r.cells.len()).max(1);
                     let mut origins = Vec::with_capacity(origin_count);
                     for i in 0..origin_count {
                         let back = if origin_count == 1 {
-                            0
+                            1.min(tail_span.saturating_sub(1))
                         } else {
-                            i * (tail_span.saturating_sub(1)) / (origin_count - 1)
+                            i * tail_span.saturating_sub(1) / (origin_count - 1)
                         };
                         origins.push(r.cells[r.cells.len() - 1 - back] as usize);
                     }
