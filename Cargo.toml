@@ -8,7 +8,7 @@ version = "0.1.0"
 license = "UNLICENSED"
 
 [workspace.dependencies]
-libm = "0.2.16"
+libm = { version = "0.2.16", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 half = { version = "2.7", default-features = false }

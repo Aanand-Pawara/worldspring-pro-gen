@@ -43,7 +43,8 @@ const built = JSON.parse(wasm.default_world_json(424242));
 }
 
 let total = 0;
-const stressWorlds = [1, 0, 2, 3, 7, 11, 42, 99, 1234, 2026, 424242, 8675309].map((seed) => wasm.default_world_json(seed));
+const stressSeeds = process.env.WS_DET_STRESS === "1" ? [1, 0, 2, 3, 7, 11, 42, 99, 1234, 2026, 424242, 8675309] : [424242];
+const stressWorlds = stressSeeds.map((seed) => wasm.default_world_json(seed));
 for (const [caseIndex, worldJson] of [...stressWorlds, JSON.stringify(sketched), JSON.stringify(built)].entries()) {
   console.log(`WASM/native generation case ${caseIndex + 1}`);
   const native = execFileSync('cargo', ['run', '-q', '--release', '-p', 'worldgen', '--example', 'dethash', '-'], {
