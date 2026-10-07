@@ -187,7 +187,7 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
             q[i] *= 0.9995; // mild transmission loss in dry country; long mapped channels remain continuous
         }
         let r = rec[i] as usize;
-        if r != i && land[r] {
+        if r < n && r != i && land[r] {
             q[r] += q[i];
             raw[r] += raw[i];
         }
@@ -299,7 +299,7 @@ fn connect_lakes_to_river_channels(
     // A lake outlet can seed a mapped river even when its discharge is modest. Keep the
     // connection selective, but do not require the full river-mapping threshold at the
     // lake boundary or many plausible lake-fed headwaters disappear.
-    let min_q = (threshold * 0.10).max(1.0);
+    let min_q = (threshold * 0.06).max(1.0);
     let mut order: Vec<usize> = (0..lakes.len()).collect();
     order.sort_by(|&a, &b| lakes[b].level_ft.total_cmp(&lakes[a].level_ft).then(a.cmp(&b)));
 
@@ -908,12 +908,14 @@ fn recompute_final_discharge(
     });
 
     let mut outlets = vec![None; lakes.len()];
-    for i in 0..n {
-        let id = lake_of[i];
-        if id == NO_LAKE { continue; }
-        let r = rec[i] as usize;
-        if r < n && r != i && (lake_of[r] == NO_LAKE || !land[r]) {
-            outlets[id as usize] = Some(i);
+    for (lake_id, lake) in lakes.iter().enumerate() {
+        for &cell in &lake.cells {
+            let i = cell as usize;
+            let r = rec[i] as usize;
+            if r < n && r != i && (lake_of[r] == NO_LAKE || !land[r]) {
+                outlets[lake_id] = Some(i);
+                break;
+            }
         }
     }
 
@@ -977,7 +979,7 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
     let is_seed = |i: usize| {
         land[i]
             && lake_of[i] == NO_LAKE
-            && ((lake_feed[i] && q[i] >= threshold * 0.12)
+            && ((lake_feed[i] && q[i] >= threshold * 0.05)
                 || (q[i] >= threshold && !upstream_above_threshold[i]))
     };
     let mut channel = vec![false; n];
