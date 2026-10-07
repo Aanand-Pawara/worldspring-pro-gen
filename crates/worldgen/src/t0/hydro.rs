@@ -279,6 +279,7 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
     let basin_id = assign_basin_ids(w, h, land, &lake_of, &rec);
     let rivers = extract_rivers(w, h, cell_ft, land, &lake_of, &rec, &q, &flow_accumulation, &basin_id, river_threshold, &lakes);
     debug_assert!(validate_river_network(w, h, land, &lake_of, &rec, &rivers));
+    debug_assert!(lakes.iter().enumerate().all(|(lake_id, _)| lake_receiver_chain_valid(lake_id, land, &lake_of, &rec, &lakes)));
     Hydro { water, flow_accumulation, basin_id, discharge: q.iter().map(|&v| v as f32).collect(), receiver: rec, lake_of, lakes, rivers }
 }
 
