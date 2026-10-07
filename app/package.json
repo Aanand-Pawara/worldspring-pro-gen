@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node -e \"const fs=require('fs'),cp=require('child_process');if(!fs.existsSync('src/gen/pkg/worldgen_wasm.js'))cp.execFileSync(process.platform==='win32'?'npm.cmd':'npm',['run','wasm'],{cwd:'..',stdio:'inherit'})\"",
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json"
