@@ -55,6 +55,11 @@ pub struct Feature {
     pub river_mouth: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_lake_id: Option<u32>,
+    /// Source/headwater cell in world feet. This is the actual birth point of the river chain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub river_source_x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub river_source_y: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mouth_lake_id: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -179,7 +184,7 @@ impl Builder<'_> {
             id.push('b');
         }
         let c = self.inp.cell_ft;
-        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, river_path: None, delta_paths: None, stream_order: None, drainage_area_mi2: None, discharge_index: None, tributary_count: None, length_mi: None, basin_id: None, river_mouth: None, source_lake_id: None, mouth_lake_id: None, area_mi2: None, max_depth_ft: None, inlet_count: None, has_outlet: None, kingdom_id: None, kingdom_name: None, political_rank: None });
+        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, river_path: None, delta_paths: None, stream_order: None, drainage_area_mi2: None, discharge_index: None, tributary_count: None, length_mi: None, basin_id: None, river_mouth: None, source_lake_id: None, river_source_x: None, river_source_y: None, mouth_lake_id: None, area_mi2: None, max_depth_ft: None, inlet_count: None, has_outlet: None, kingdom_id: None, kingdom_name: None, political_rank: None });
         id
     }
 
@@ -551,6 +556,8 @@ impl Builder<'_> {
                     f.basin_id = Some(r.basin_id);
                     f.river_mouth = Some(match r.mouth { Mouth::Ocean => "ocean", Mouth::Lake => "lake", Mouth::Dry => "dry", Mouth::Confluence => "confluence" });
                     f.source_lake_id = r.source_lake;
+                    f.river_source_x = Some((r.source_cell as usize % w) as f64 * inp.cell_ft);
+                    f.river_source_y = Some((r.source_cell as usize / w) as f64 * inp.cell_ft);
                     f.mouth_lake_id = r.mouth_lake;
                 }
             }
@@ -820,11 +827,31 @@ fn build_delta_paths(
     let my = (mouth / w) as f64;
     let ox = (ocean % w) as f64;
     let oy = (ocean / w) as f64;
-    let fx = ox - mx;
-    let fy = oy - my;
-    let fl = crate::core::sqrt(fx * fx + fy * fy).max(1e-6);
-    let fx = fx / fl;
-    let fy = fy / fl;
+    // The delta must continue the river's actual terminal bearing, not merely the vector
+    // to an arbitrarily chosen ocean cell. The previous->mouth tangent is the authoritative
+    // local flow direction; the ocean receiver is only used when the tangent is unavailable or
+    // clearly disagrees with the terminal water direction.
+    let (mut fx, mut fy) = if river.cells.len() >= 2 {
+        let prev = river.cells[river.cells.len() - 2] as usize;
+        (mx - (prev % w) as f64, my - (prev / w) as f64)
+    } else {
+        (ox - mx, oy - my)
+    };
+    let tangent_len = crate::core::sqrt(fx * fx + fy * fy).max(1e-6);
+    fx /= tangent_len;
+    fy /= tangent_len;
+
+    let ocean_dx = ox - mx;
+    let ocean_dy = oy - my;
+    let ocean_len = crate::core::sqrt(ocean_dx * ocean_dx + ocean_dy * ocean_dy).max(1e-6);
+    let ocean_fx = ocean_dx / ocean_len;
+    let ocean_fy = ocean_dy / ocean_len;
+    // If the terminal receiver lies materially behind the river's local flow bearing, use the
+    // real receiver direction rather than generating a fan that visibly folds upstream.
+    if fx * ocean_fx + fy * ocean_fy < 0.20 {
+        fx = ocean_fx;
+        fy = ocean_fy;
+    }
     let radius = ((8.0 + 1.5 * crate::core::sqrt(
         (river.q.last().copied().unwrap_or(river.peak_discharge) as f64
             / super::hydro::RIVER_Q).max(1.0),
@@ -885,7 +912,7 @@ fn build_delta_paths(
         goals.sort_unstable();
         let mut best: Option<Vec<usize>> = None;
         for goal in goals {
-            if let Some(path) = delta_route(inp, mouth, goal, &used, radius + 3) {
+            if let Some(path) = delta_route(inp, mouth, goal, &used, radius + 3, fx, fy) {
                 if best.as_ref().is_none_or(|b| path.len() < b.len()) { best = Some(path); }
             }
         }
@@ -912,6 +939,8 @@ fn delta_route(
     goal: usize,
     used: &[bool],
     radius: usize,
+    flow_x: f64,
+    flow_y: f64,
 ) -> Option<Vec<usize>> {
     let (w, h) = (inp.w, inp.h);
     let sx = start % w;
@@ -944,9 +973,23 @@ fn delta_route(
             let step = if diagonal > 1.0 { 141u64 } else { 100u64 };
             let rise = (inp.height[nb] - inp.height[cur]).max(0.0);
             if rise > inp.cell_ft * 0.12 { continue; }
+
+            // A distributary can meander sideways, but it cannot walk materially back up the
+            // river's downstream bearing. This prevents the old "upward delta" artifact where
+            // A* found a cheaper terrain route that folded back toward the river source.
+            let cur_dx = cx as f64 - sx as f64;
+            let cur_dy = cy as f64 - sy as f64;
+            let next_dx = nx as f64 - sx as f64;
+            let next_dy = ny as f64 - sy as f64;
+            let cur_projection = cur_dx * flow_x + cur_dy * flow_y;
+            let next_projection = next_dx * flow_x + next_dy * flow_y;
+            if next_projection + 0.35 < cur_projection { continue; }
+
+            let forward_step = (nx as f64 - cx as f64) * flow_x + (ny as f64 - cy as f64) * flow_y;
+            let direction_cost = if forward_step < 0.05 { 500u64 } else { 0u64 };
             let slope_cost = (rise / inp.cell_ft * 2400.0) as u64;
             let reuse_cost = if used[nb] && nb != start { 9000 } else { 0 };
-            let g = base.saturating_add(step + slope_cost + reuse_cost);
+            let g = base.saturating_add(step + slope_cost + reuse_cost + direction_cost);
             if g >= dist[nb] { continue; }
             dist[nb] = g;
             prev[nb] = cur as u32;
