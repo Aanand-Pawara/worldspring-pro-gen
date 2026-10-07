@@ -819,7 +819,7 @@ fn build_delta_paths(
     river: &super::hydro::River,
     mouth: usize,
     ocean: usize,
-    desired: usize,
+    _desired: usize,
 ) -> Option<Vec<Vec<[f64; 2]>>> {
     let (w, h) = (inp.w, inp.h);
     let cell_ft = inp.cell_ft;
@@ -828,141 +828,168 @@ fn build_delta_paths(
     let ox = (ocean % w) as f64;
     let oy = (ocean / w) as f64;
 
-    // The parent river and its ocean receiver define the downstream axis. Use several
-    // upstream cells to suppress a one-cell D8 zig-zag, but fall back to the actual receiver
-    // when the sampled tangent disagrees with the coast-facing direction.
-    let back = river.cells.len().saturating_sub(5);
-    let anchor = river.cells[back] as usize;
-    let mut fx = mx - (anchor % w) as f64;
-    let mut fy = my - (anchor / w) as f64;
+    // A delta is a terminal network, not a collection of arbitrary paths from the same
+    // point. Establish one stable apex-to-sea axis first. The parent river supplies the
+    // tangent; the actual ocean receiver prevents a noisy D8 tangent from pointing inland.
+    let anchor = river.cells[river.cells.len().saturating_sub(7)] as usize;
+    let mut tx = mx - (anchor % w) as f64;
+    let mut ty = my - (anchor / w) as f64;
+    let tl = crate::core::sqrt(tx * tx + ty * ty).max(1e-6);
+    tx /= tl;
+    ty /= tl;
+
+    let mut oxv = ox - mx;
+    let mut oyv = oy - my;
+    let ol = crate::core::sqrt(oxv * oxv + oyv * oyv).max(1e-6);
+    oxv /= ol;
+    oyv /= ol;
+
+    let mut fx = 0.60 * tx + 0.40 * oxv;
+    let mut fy = 0.60 * ty + 0.40 * oyv;
     let fl = crate::core::sqrt(fx * fx + fy * fy).max(1e-6);
     fx /= fl;
     fy /= fl;
 
-    let odx = ox - mx;
-    let ody = oy - my;
-    let olen = crate::core::sqrt(odx * odx + ody * ody).max(1e-6);
-    let ofx = odx / olen;
-    let ofy = ody / olen;
-    if fx * ofx + fy * ofy < 0.20 {
-        fx = ofx;
-        fy = ofy;
-    } else {
-        fx = 0.75 * fx + 0.25 * ofx;
-        fy = 0.75 * fy + 0.25 * ofy;
-        let fl = crate::core::sqrt(fx * fx + fy * fy).max(1e-6);
-        fx /= fl;
-        fy /= fl;
-    }
-
     let mouth_z = inp.height[mouth];
     let strength = (river.q.last().copied().unwrap_or(river.peak_discharge) as f64
         / super::hydro::RIVER_Q).max(1.0);
-    // Keep the fan tied to channel scale. Extremely large arbitrary radii were allowing
-    // branches to search far inland and create disconnected-looking fingers.
-    let radius = (10.0 + 2.2 * crate::core::sqrt(strength)).round() as usize;
-    let radius = radius.clamp(10, 24);
 
-    // A delta branch must not cross an existing unrelated river. The parent river itself is
-    // also blocked, except at the bifurcation cell, so branches leave the mouth instead of
-    // walking upstream along the parent channel.
+    // Keep the delta compact relative to the parent channel. A broad fan with long fingers
+    // reads as a cracked river rather than a delta, especially on generated coastlines.
+    let radius = (11.0 + 2.0 * crate::core::sqrt(strength)).round() as usize;
+    let radius = radius.clamp(11, 23);
+
+    // Existing rivers are hard obstacles. The parent is blocked too, except for the apex.
+    // This preserves the hydrology/feature separation without allowing a branch to crawl
+    // backwards along its parent.
     let mut blocked = vec![false; w * h];
     for other in &inp.hydro.rivers {
-        if other.source_cell == river.source_cell { continue; }
+        if other.source_cell == river.source_cell {
+            continue;
+        }
         for &c in &other.cells {
             let c = c as usize;
             blocked[c] = true;
-            for (nb, _) in neighbors(w, h, c) { blocked[nb] = true; }
+            for (nb, _) in neighbors(w, h, c) {
+                blocked[nb] = true;
+            }
         }
     }
     for &c in &river.cells {
-        // Block the parent channel itself, but leave its immediate surroundings open so the
-        // daughter channels can actually peel away at the mouth apex.
         blocked[c as usize] = true;
     }
     blocked[mouth] = false;
 
-    // Find genuine shoreline targets. Instead of accepting whichever cells happen to sort
-    // first, select targets around physically plausible bifurcation bearings. Field and
-    // experimental deltas cluster around a ~70° daughter-channel bifurcation angle.
+    // Choose exactly two daughter mouths around the apex. This gives the common, readable
+    // two-way delta split instead of making branch count scale directly with discharge.
+    // The parent channel + two daughters already gives three visible terminal outlets.
     let forward_angle = libm::atan2(fy, fx);
+    let half_angle = 35.0_f64.to_radians();
     let mut targets = Vec::<(f64, f64, usize)>::new();
+
     for y in my as isize - radius as isize..=my as isize + radius as isize {
-        if y < 0 || y >= h as isize { continue; }
+        if y < 0 || y >= h as isize {
+            continue;
+        }
         for x in mx as isize - radius as isize..=mx as isize + radius as isize {
-            if x < 0 || x >= w as isize { continue; }
+            if x < 0 || x >= w as isize {
+                continue;
+            }
             let k = y as usize * w + x as usize;
-            if inp.land[k] || !neighbors(w, h, k).any(|(nb, _)| inp.land[nb]) { continue; }
-            if neighbors(w, h, k).any(|(nb, _)| inp.land[nb] && blocked[nb]) { continue; }
+            if inp.land[k] || !neighbors(w, h, k).any(|(nb, _)| inp.land[nb]) {
+                continue;
+            }
 
             let vx = x as f64 - mx;
             let vy = y as f64 - my;
             let d = crate::core::sqrt(vx * vx + vy * vy);
-            if d < 4.0 || d > radius as f64 { continue; }
+            if d < 5.0 || d > radius as f64 {
+                continue;
+            }
 
             let angle = libm::atan2(vy, vx);
             let mut da = angle - forward_angle;
             while da > std::f64::consts::PI { da -= std::f64::consts::TAU; }
             while da < -std::f64::consts::PI { da += std::f64::consts::TAU; }
-            if da.abs() > 1.35 { continue; }
+
+            // Targets belong on the two sides of the main flow axis, not directly ahead of it.
+            // This leaves an island/mouth-bar between daughter channels.
+            if da.abs() < 0.22 || da.abs() > 1.15 {
+                continue;
+            }
+            if (da > 0.0) != (da.abs() >= 0.22) {
+                continue;
+            }
 
             let along = (vx * fx + vy * fy) / d;
-            if along < 0.35 { continue; }
+            if along < 0.45 {
+                continue;
+            }
 
-            let coast_z = neighbors(w, h, k)
+            let land_goal = neighbors(w, h, k)
                 .filter(|(nb, _)| inp.land[*nb] && inp.hydro.lake_of[*nb] == super::hydro::NO_LAKE)
-                .map(|(nb, _)| inp.height[nb])
-                .fold(f64::INFINITY, f64::min);
-            let grade = ((mouth_z - coast_z).max(0.0)) / (d * cell_ft).max(cell_ft);
-            if !grade.is_finite() || grade > super::hydro::DELTA_MAX_GRADE { continue; }
+                .map(|(nb, _)| *nb)
+                .find(|&nb| !blocked[nb]);
+            let Some(goal) = land_goal else { continue; };
 
-            // Prefer nearby shoreline, downstream targets with low angular error, and targets
-            // whose approach is not already occupied by another river.
-            let score = d + 3.5 * da.abs() * radius as f64 - 2.0 * along * radius as f64;
-            targets.push((score, da, k));
+            let coast_z = inp.height[goal];
+            let grade = ((mouth_z - coast_z).max(0.0)) / (d * cell_ft).max(cell_ft);
+            if !grade.is_finite() || grade > super::hydro::DELTA_MAX_GRADE {
+                continue;
+            }
+
+            let side = if da < 0.0 { -1.0 } else { 1.0 };
+            let angular_error = (da - side * half_angle).abs();
+            let target_score =
+                d
+                + angular_error * 6.0 * radius as f64
+                - along * 2.0 * radius as f64;
+
+            targets.push((target_score, da, k));
         }
     }
-    targets.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.2.cmp(&b.2)));
 
-    // Two daughter channels are the normal case. Very large rivers may support three, but
-    // they still branch around the same mouth-bar apex rather than spawning many parallel
-    // upstream lines.
-    let branch_count = desired.min(3).max(2);
-    let ideal_angles: &[f64] = if branch_count == 2 {
-        &[-0.6283185307179586, 0.6283185307179586] // ±36°, 72° total bifurcation
-    } else {
-        &[-0.8726646259971648, 0.0, 0.8726646259971648] // ±50° plus a central arm
-    };
-
-    let mut chosen = Vec::<usize>::new();
-    for &ideal in ideal_angles {
+    // Pick one mouth on each side, enforcing real spatial separation. Without this, nearby
+    // shoreline cells can produce two almost-identical channels and a visually solid blob.
+    let mut chosen = Vec::<usize>::with_capacity(2);
+    for side in [-1.0_f64, 1.0_f64] {
         let mut best: Option<(f64, usize)> = None;
         for &(score, da, target) in &targets {
-            if chosen.contains(&target) { continue; }
-            let angular_error = (da - ideal).abs();
-            if angular_error > 0.42 { continue; }
-            let candidate = score + angular_error * 5.0 * radius as f64;
-            if best.is_none_or(|b| candidate < b.0) {
-                best = Some((candidate, target));
+            if (da < 0.0) != (side < 0.0) {
+                continue;
+            }
+            if chosen.iter().any(|&other| {
+                let dx = (target % w) as f64 - (other % w) as f64;
+                let dy = (target / w) as f64 - (other / w) as f64;
+                dx * dx + dy * dy < (0.65 * radius as f64).powi(2)
+            }) {
+                continue;
+            }
+            if best.is_none_or(|b| score < b.0) {
+                best = Some((score, target));
             }
         }
         if let Some((_, target)) = best {
             chosen.push(target);
         }
     }
-    if chosen.len() < 2 { return None; }
+    if chosen.len() != 2 {
+        return None;
+    }
 
-    // The bifurcation happens at the actual river mouth. Starting several cells upstream was
-    // producing artificial parallel channels and made the delta look like a forked river
-    // rather than daughter distributaries around a mouth bar.
+    // Both daughters leave from the true river mouth. The shape of the fan is controlled by
+    // the two selected mouths; A* is only responsible for staying on valid terrain.
     let branch_start = mouth;
-
     let mut used = vec![false; w * h];
-    let mut paths = Vec::with_capacity(chosen.len());
-    for &target in &chosen {
+    let mut paths = Vec::with_capacity(2);
+
+    for (branch_index, &target) in chosen.iter().enumerate() {
         let mut goals = Vec::<usize>::new();
         for (nb, _) in neighbors(w, h, target) {
-            if inp.land[nb] && inp.hydro.lake_of[nb] == super::hydro::NO_LAKE {
+            if inp.land[nb]
+                && inp.hydro.lake_of[nb] == super::hydro::NO_LAKE
+                && !blocked[nb]
+            {
                 goals.push(nb);
             }
         }
@@ -970,36 +997,135 @@ fn build_delta_paths(
 
         let mut best: Option<Vec<usize>> = None;
         for goal in goals {
-            if let Some(path) = delta_route(inp, branch_start, goal, &used, &blocked, radius + 4, fx, fy) {
-                if path.len() >= 4 && best.as_ref().is_none_or(|b| path.len() < b.len()) {
-                    best = Some(path);
+            if let Some(path) = delta_route(
+                inp,
+                branch_start,
+                goal,
+                &used,
+                &blocked,
+                radius + 5,
+                fx,
+                fy,
+            ) {
+                if path.len() < 4 {
+                    continue;
+                }
+                let simplified = simplify_delta_path(inp, &path, &blocked);
+                if simplified.len() < 3 {
+                    continue;
+                }
+                if best.as_ref().is_none_or(|b| simplified.len() < b.len()) {
+                    best = Some(simplified);
                 }
             }
         }
+
         let Some(path) = best else { continue; };
 
-        // Reserve the branch corridor so later daughter channels form separate bars/islands
-        // instead of collapsing into nearly coincident parallel lines.
-        for &cell in &path {
+        // Reserve a narrow corridor. A full-neighbourhood reservation made the previous
+        // implementation over-constrained and encouraged ugly detours, so only reserve the
+        // path itself plus a single lateral cell.
+        for (i, &cell) in path.iter().enumerate() {
             used[cell] = true;
-            for (nb, _) in neighbors(w, h, cell) { used[nb] = true; }
+            if i > 0 && i + 1 < path.len() {
+                let prev = path[i - 1];
+                let next = path[i + 1];
+                let dx = (next % w) as isize - (prev % w) as isize;
+                let dy = (next / w) as isize - (prev / w) as isize;
+                let side = if branch_index == 0 { (-dy, dx) } else { (dy, -dx) };
+                let sx = (cell % w) as isize + side.0.signum();
+                let sy = (cell / w) as isize + side.1.signum();
+                if sx >= 0 && sy >= 0 && sx < w as isize && sy < h as isize {
+                    used[sy as usize * w + sx as usize] = true;
+                }
+            }
         }
 
-        let mut points = path.iter().map(|&k| {
-            [(k % w) as f64 * cell_ft, (k / w) as f64 * cell_ft]
-        }).collect::<Vec<_>>();
+        let mut points = path.iter()
+            .map(|&k| [(k % w) as f64 * cell_ft, (k / w) as f64 * cell_ft])
+            .collect::<Vec<_>>();
         points.push([(target % w) as f64 * cell_ft, (target / w) as f64 * cell_ft]);
 
-        // The route already follows terrain and the intended bifurcation bearing. One light
-        // Chaikin pass removes grid stair-steps without adding the large meander field used by
-        // ordinary rivers.
+        // The renderer uses a Catmull-Rom curve, so give it a deliberately smooth control
+        // polygon rather than raw D8 stair steps. Two light Chaikin passes produce a broad,
+        // natural bend while keeping the branch attached to the apex and mouth.
         let weights = vec![1.0f32; points.len()];
-        let (smooth, _) = chaikin(&points, &weights, 1);
-        if smooth.len() >= 3 { paths.push(smooth); } else { paths.push(points); }
+        let (smooth, _) = chaikin(&points, &weights, 2);
+        if smooth.len() >= 4 {
+            paths.push(smooth);
+        }
     }
 
-    (paths.len() >= 2).then_some(paths)
+    if paths.len() == 2 { Some(paths) } else { None }
 }
+
+fn simplify_delta_path(inp: &Inputs, path: &[usize], blocked: &[bool]) -> Vec<usize> {
+    if path.len() <= 2 {
+        return path.to_vec();
+    }
+
+    let mut out = Vec::with_capacity(path.len());
+    let mut anchor = 0usize;
+    out.push(path[0]);
+
+    while anchor + 1 < path.len() {
+        let mut farthest = anchor + 1;
+        for candidate in (anchor + 2..path.len()).rev() {
+            if delta_segment_clear(inp, path[anchor], path[candidate], blocked) {
+                farthest = candidate;
+                break;
+            }
+        }
+        out.push(path[farthest]);
+        anchor = farthest;
+    }
+
+    out
+}
+
+fn delta_segment_clear(inp: &Inputs, a: usize, b: usize, blocked: &[bool]) -> bool {
+    let (w, h) = (inp.w, inp.h);
+    let mut x0 = (a % w) as isize;
+    let mut y0 = (a / w) as isize;
+    let x1 = (b % w) as isize;
+    let y1 = (b / w) as isize;
+
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+
+    loop {
+        if x0 < 0 || y0 < 0 || x0 >= w as isize || y0 >= h as isize {
+            return false;
+        }
+        let k = y0 as usize * w + x0 as usize;
+        if !inp.land[k]
+            || inp.hydro.lake_of[k] != super::hydro::NO_LAKE
+            || (blocked[k] && k != a)
+        {
+            return false;
+        }
+
+        if x0 == x1 && y0 == y1 {
+            break;
+        }
+
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x0 += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y0 += sy;
+        }
+    }
+
+    true
+}
+
 fn delta_route(
     inp: &Inputs,
     start: usize,
@@ -1015,69 +1141,111 @@ fn delta_route(
     let sy = start / w;
     let gx = goal % w;
     let gy = goal / w;
+
     let min_x = sx.min(gx).saturating_sub(2);
     let max_x = (sx.max(gx) + 2).min(w.saturating_sub(1));
     let min_y = sy.min(gy).saturating_sub(2);
     let max_y = (sy.max(gy) + 2).min(h.saturating_sub(1));
+
     let mut heap = BinaryHeap::<Reverse<(u64, u32)>>::new();
     let mut dist = vec![u64::MAX; w * h];
     let mut prev = vec![u32::MAX; w * h];
     dist[start] = 0;
     heap.push(Reverse((0, start as u32)));
+
     while let Some(Reverse((_, cur_u))) = heap.pop() {
         let cur = cur_u as usize;
-        if cur == goal { break; }
+        if cur == goal {
+            break;
+        }
+
         let cx = cur % w;
         let cy = cur / w;
-        if cx < min_x || cx > max_x || cy < min_y || cy > max_y { continue; }
-        if ((cx as isize - sx as isize).abs().max((cy as isize - sy as isize) as isize)) as usize > radius { continue; }
+        if cx < min_x || cx > max_x || cy < min_y || cy > max_y {
+            continue;
+        }
+        if ((cx as isize - sx as isize).abs().max((cy as isize - sy as isize) as isize)) as usize > radius {
+            continue;
+        }
+
         let base = dist[cur];
-        if base == u64::MAX { continue; }
+        if base == u64::MAX {
+            continue;
+        }
+
         for (nb, diagonal) in neighbors(w, h, cur) {
-            if !inp.land[nb] || inp.hydro.lake_of[nb] != super::hydro::NO_LAKE { continue; }
-            if blocked[nb] && nb != start { continue; }
+            if !inp.land[nb] || inp.hydro.lake_of[nb] != super::hydro::NO_LAKE {
+                continue;
+            }
+            if blocked[nb] && nb != start {
+                continue;
+            }
+
             let nx = nb % w;
             let ny = nb / w;
-            if nx < min_x || nx > max_x || ny < min_y || ny > max_y { continue; }
+            if nx < min_x || nx > max_x || ny < min_y || ny > max_y {
+                continue;
+            }
+
             let step = if diagonal > 1.0 { 141u64 } else { 100u64 };
             let rise = (inp.height[nb] - inp.height[cur]).max(0.0);
-            // Delta distributaries are built on a very low-gradient plain. Do not let A*
-            // climb over terrain merely because the cell is closer to the shoreline target.
-            if rise > inp.cell_ft * 0.04 { continue; }
+            if rise > inp.cell_ft * 0.04 {
+                continue;
+            }
 
-            // A distributary can meander sideways, but it cannot walk materially back up the
-            // river's downstream bearing. This prevents the old "upward delta" artifact where
-            // A* found a cheaper terrain route that folded back toward the river source.
             let cur_dx = cx as f64 - sx as f64;
             let cur_dy = cy as f64 - sy as f64;
             let next_dx = nx as f64 - sx as f64;
             let next_dy = ny as f64 - sy as f64;
             let cur_projection = cur_dx * flow_x + cur_dy * flow_y;
             let next_projection = next_dx * flow_x + next_dy * flow_y;
-            if next_projection + 0.15 < cur_projection { continue; }
+            if next_projection + 0.15 < cur_projection {
+                continue;
+            }
 
-            let forward_step = (nx as f64 - cx as f64) * flow_x + (ny as f64 - cy as f64) * flow_y;
-            let direction_cost = if forward_step < -0.15 { 2_500u64 } else if forward_step < 0.05 { 800u64 } else { 0u64 };
+            let forward_step = (nx as f64 - cx as f64) * flow_x
+                + (ny as f64 - cy as f64) * flow_y;
+            let direction_cost = if forward_step < -0.15 {
+                2_500u64
+            } else if forward_step < 0.05 {
+                800u64
+            } else {
+                0u64
+            };
+
             let slope_cost = (rise / inp.cell_ft * 2400.0) as u64;
             let reuse_cost = if used[nb] && nb != start { 50_000 } else { 0 };
             let g = base.saturating_add(step + slope_cost + reuse_cost + direction_cost);
-            if g >= dist[nb] { continue; }
+            if g >= dist[nb] {
+                continue;
+            }
+
             dist[nb] = g;
             prev[nb] = cur as u32;
+
             let dx = gx as f64 - nx as f64;
             let dy = gy as f64 - ny as f64;
             let heuristic = (crate::core::sqrt(dx * dx + dy * dy) * 140.0) as u64;
             heap.push(Reverse((g.saturating_add(heuristic), nb as u32)));
         }
     }
-    if dist[goal] == u64::MAX { return None; }
+
+    if dist[goal] == u64::MAX {
+        return None;
+    }
+
     let mut path = Vec::new();
     let mut cur = goal;
     for _ in 0..(radius * radius + 8) {
         path.push(cur);
-        if cur == start { path.reverse(); return Some(path); }
+        if cur == start {
+            path.reverse();
+            return Some(path);
+        }
         let p = prev[cur];
-        if p == u32::MAX { return None; }
+        if p == u32::MAX {
+            return None;
+        }
         cur = p as usize;
     }
     None
