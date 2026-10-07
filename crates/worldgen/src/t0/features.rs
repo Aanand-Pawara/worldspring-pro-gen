@@ -885,10 +885,10 @@ fn build_delta_paths(
     // Keep this deliberately small so generated maps get morphology, not a bundle of scratches.
     let branch_count = if strength >= 5.0 { 5 } else { 4 };
     let mut targets = Vec::<(f64, f64, usize)>::new();
-    let target_angles = if branch_count == 5 {
-        [-0.95_f64, -0.48, 0.0, 0.48, 0.95]
+    let target_angles: &[f64] = if branch_count == 5 {
+        &[-0.95_f64, -0.48, 0.0, 0.48, 0.95]
     } else {
-        [-0.82_f64, -0.30, 0.30, 0.82]
+        &[-0.82_f64, -0.30, 0.30, 0.82]
     };
     let target_radius = radius as f64 * 0.82;
 
