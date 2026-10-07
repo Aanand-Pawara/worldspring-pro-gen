@@ -272,7 +272,7 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
     // Receiver topology is final now. Recompute discharge from that final graph so newly
     // connected lakes actually feed the rivers extracted below.
     let route_order = receiver_order(w, h, land, &mut rec);
-    let (q, lake_net) = recompute_final_discharge(
+    let (q, _) = recompute_final_discharge(
         w, h, land, &lake_of, &rec, &route_order, &clim, &feed, &lakes,
     );
     let flow_accumulation = accumulate_flow(w, h, land, &lake_of, &rec, &route_order);
@@ -698,7 +698,7 @@ fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], fille
 
         // Try a small deterministic shortlist. The bounded spill search does the expensive
         // terrain test, so proximity alone can never create a connection over a ridge.
-        for (_, _, _, target) in candidates.into_iter().take(8) {
+        for (_, _, _, _, target) in candidates.into_iter().take(8) {
             let Some((source_cell, path, target_cell)) = lake_spill_path(
                 w, h, land, lake_of, filled, lakes[source].level_ft,
                 &boundaries[source], &boundaries[target], target as u32,
