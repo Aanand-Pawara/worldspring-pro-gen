@@ -603,10 +603,10 @@ impl Builder<'_> {
                     let tributary_score = (r.tributary_count as f64 / 3.0).min(2.0) * 0.55;
                     let length_score = libm::log2((r.length_cells as f64 / 36.0).max(1.0)) * 0.35;
                     let maturity = q_score * 0.70 + area_score * 0.55 + order_score + tributary_score + length_score;
-                    // Every qualifying delta gets at least three distributaries, then scales
-                    // toward nine as discharge, drainage area, order and length mature.
-                    let desired = (3.0 + maturity * 1.15).round() as usize;
-                    let desired = desired.clamp(3, 9);
+                    // Keep three distributaries as the normal case. Increase the count only for
+                    // genuinely mature rivers, and cap it at six so a delta remains a
+                    // readable mouth fan rather than a bundle of parallel scratches.
+                    let desired = (3 + (maturity / 4.0).floor() as usize).clamp(3, 6);
                     let branch_len_cells = (5.0
                         + 0.60 * crate::core::sqrt(q_ratio)
                         + 0.35 * (r.order.saturating_sub(1) as f64)
@@ -749,8 +749,8 @@ impl Builder<'_> {
                     // Distributaries begin in the lower delta plain, not all the way upstream.
                     // Keep the bifurcation zone compact so the renderer produces a mouth fan
                     // instead of long diagonal cuts across the floodplain.
-                    let tail_span = r.cells.len().min((desired / 2 + 3).clamp(4, 7));
-                    let origin_count = desired.min(4).min(r.cells.len()).max(1);
+                    let tail_span = r.cells.len().min((desired + 4).clamp(6, 10));
+                    let origin_count = desired.min(tail_span).min(r.cells.len()).max(1);
                     let mut origins = Vec::with_capacity(origin_count);
                     for i in 0..origin_count {
                         let back = if origin_count == 1 {
@@ -767,6 +767,9 @@ impl Builder<'_> {
                     for (origin_index, origin) in origins.into_iter().enumerate() {
                         if delta_paths.len() >= desired { break; }
                         let start = [(origin % w) as f64 * inp.cell_ft, (origin / w) as f64 * inp.cell_ft];
+                        // One origin creates at most one distributary. The previous loop
+                        // allowed one origin to claim several shoreline targets, producing
+                        // the unnatural "comb" of parallel branches visible in the map.
                         for (candidate_index, target) in chosen.iter().enumerate() {
                             if delta_paths.len() >= desired { break; }
                             let route_seed = seed ^ ((origin_index as u64 + 1) * 0x9e37_79b9)
@@ -788,7 +791,10 @@ impl Builder<'_> {
                                     })
                                 })
                             });
-                            if separated { delta_paths.push(snap_delta_path(path)); }
+                            if separated {
+                                delta_paths.push(snap_delta_path(path));
+                                break;
+                            }
                         }
                     }
 
@@ -845,7 +851,12 @@ impl Builder<'_> {
                                         })
                                     })
                                 });
-                                if separated { delta_paths.push(path); }
+                                if separated {
+                                    delta_paths.push(path);
+                                    // Keep the one-origin/one-distributary invariant in the
+                                    // fallback path as well.
+                                    break;
+                                }
                             }
                         }
                     }
