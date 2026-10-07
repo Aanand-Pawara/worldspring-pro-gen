@@ -293,7 +293,10 @@ fn connect_lakes_to_river_channels(
 ) {
     if lakes.is_empty() { return; }
     const MAX_CONNECT_CELLS: usize = 24;
-    let min_q = (threshold * 0.50).max(1.0);
+    // A lake outlet can seed a mapped river even when its discharge is modest. Keep the
+    // connection selective, but do not require the full river-mapping threshold at the
+    // lake boundary or many plausible lake-fed headwaters disappear.
+    let min_q = (threshold * 0.35).max(1.0);
     let mut order: Vec<usize> = (0..lakes.len()).collect();
     order.sort_by(|&a, &b| lakes[b].level_ft.total_cmp(&lakes[a].level_ft).then(a.cmp(&b)));
 
@@ -307,7 +310,7 @@ fn connect_lakes_to_river_channels(
     }
 
     for lake_id in order {
-        if lakes[lake_id].outlet.is_some() || lake_net[lake_id] <= threshold * 0.10 || boundaries[lake_id].is_empty() { continue; }
+        if lakes[lake_id].outlet.is_some() || lake_net[lake_id] <= threshold * 0.05 || boundaries[lake_id].is_empty() { continue; }
         let Some((source_cell, path, target)) = lake_river_spill_path(
             w, h, land, lake_of, filled, q, rec, min_q, lakes[lake_id].level_ft,
             MAX_CONNECT_CELLS, &boundaries[lake_id],
@@ -586,14 +589,18 @@ fn lake_receiver_chain_valid(start: usize, land: &[bool], lake_of: &[u32], rec: 
 
 fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], filled: &[f64], rec: &mut [u32], lakes: &mut [Lake]) {
     if lakes.len() < 2 { return; }
-    // Measure proximity between lake shores, not centres. Large lakes can be physically
-    // adjacent while their centres are far apart.
+
+    // Connect nearby lakes as a serial surface-water network. The important ordering detail is
+    // that we process high lakes first but do NOT require the lower lake to already have an
+    // outlet. That lower lake may be the next link in the chain and will receive its own outlet
+    // when its turn arrives. This is the topology Great-Lakes-style systems need.
     const MAX_CONNECT_CELLS: usize = 48;
+    const MIN_LEVEL_DROP_FT: f64 = 0.25;
 
     for lake_id in 0..lakes.len() {
         lakes[lake_id].outlet = lakes[lake_id].cells.iter().copied().find(|&c| {
             let r = rec[c as usize] as usize;
-            r != c as usize && lake_of[r] != lake_id as u32
+            r != c as usize && (r < lake_of.len()) && lake_of[r] != lake_id as u32
         });
     }
 
@@ -616,34 +623,32 @@ fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], fille
         boundaries.push(edge);
     }
 
-    let rect_distance = |a: (usize, usize, usize, usize), b: (usize, usize, usize, usize)| -> usize {
-        let dx = if a.2 < b.0 { b.0 - a.2 - 1 } else if b.2 < a.0 { a.0 - b.2 - 1 } else { 0 };
-        let dy = if a.3 < b.1 { b.1 - a.3 - 1 } else if b.3 < a.1 { a.1 - b.3 - 1 } else { 0 };
-        dx + dy
-    };
-
-    // Process high lakes first so every forced connection points downhill into a lower lake.
+    // Higher water surfaces feed lower ones. Stable lake-id ordering breaks ties.
     let mut order: Vec<usize> = (0..lakes.len()).collect();
     order.sort_by(|&a, &b| lakes[b].level_ft.total_cmp(&lakes[a].level_ft).then(a.cmp(&b)));
 
     for &source in &order {
         if boundaries[source].is_empty() { continue; }
 
+        // Once a lake already has a valid ocean-reaching outlet, do not replace it with a
+        // shorter inland link. Otherwise a nearby lake can accidentally sever the basin outlet.
         let source_already_ocean = lakes[source].outlet.is_some()
             && lake_reaches_ocean(source, land, lake_of, rec, lakes);
+        if source_already_ocean { continue; }
 
         let mut candidates: Vec<(bool, bool, usize, usize)> = Vec::new();
         for target in 0..lakes.len() {
-            if target == source || lakes[target].level_ft >= lakes[source].level_ft { continue; }
-            if !lake_receiver_chain_valid(target, land, lake_of, rec, lakes) { continue; }
+            if target == source || lakes[target].level_ft >= lakes[source].level_ft - MIN_LEVEL_DROP_FT {
+                continue;
+            }
 
-            let proximity = rect_distance(bounds[source], bounds[target]);
+            let proximity = rect_distance_lakes(bounds[source], bounds[target]);
             if proximity > MAX_CONNECT_CELLS { continue; }
 
-            let ocean_connected = lake_reaches_ocean(target, land, lake_of, rec, lakes);
-            // Never replace a valid ocean-reaching outlet with a dead-end inland lake.
-            if source_already_ocean && !ocean_connected { continue; }
-
+            // Prefer targets that already continue toward the ocean, but a terminal lower lake
+            // is still a valid target. It will be connected farther downstream later.
+            let ocean_connected = lakes[target].outlet.is_some()
+                && lake_reaches_ocean(target, land, lake_of, rec, lakes);
             candidates.push((ocean_connected, lakes[target].outlet.is_some(), proximity, target));
         }
 
@@ -654,8 +659,8 @@ fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], fille
                 .then(a.3.cmp(&b.3))
         });
 
-        // Try only a small deterministic shortlist. The expensive part is the actual
-        // spill-path search, so we avoid doing it for every lake pair.
+        // Try a small deterministic shortlist. The bounded spill search does the expensive
+        // terrain test, so proximity alone can never create a connection over a ridge.
         for (_, _, _, target) in candidates.into_iter().take(8) {
             let Some((source_cell, path, target_cell)) = lake_spill_path(
                 w, h, land, lake_of, filled, lakes[source].level_ft,
@@ -669,17 +674,25 @@ fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], fille
                 continue;
             }
 
-            // This is the actual hydrological edge: source lake -> land channel -> target lake.
+            // Real receiver topology: source lake -> land connecting river -> target lake.
             rec[source_cell as usize] = path[0];
             for pair in path.windows(2) { rec[pair[0] as usize] = pair[1]; }
             rec[*path.last().unwrap() as usize] = target_cell;
             lakes[source].outlet = Some(source_cell);
+
             let target_id = lake_of[target_cell as usize] as usize;
             lakes[target_id].inlet_count = lakes[target_id].inlet_count.saturating_add(1);
             break;
         }
     }
 }
+
+fn rect_distance_lakes(a: (usize, usize, usize, usize), b: (usize, usize, usize, usize)) -> usize {
+    let dx = if a.2 < b.0 { b.0 - a.2 - 1 } else if b.2 < a.0 { a.0 - b.2 - 1 } else { 0 };
+    let dy = if a.3 < b.1 { b.1 - a.3 - 1 } else if b.3 < a.1 { a.1 - b.3 - 1 } else { 0 };
+    dx + dy
+}
+
 fn receiver_path_would_cycle(source_cell: u32, path: &[u32], target_cell: u32, rec: &[u32]) -> bool {
     let n = rec.len();
     let mut forbidden = Vec::with_capacity(path.len() + 1);

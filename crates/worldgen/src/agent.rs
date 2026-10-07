@@ -54,6 +54,8 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
             basin_id: None,
             river_mouth: None,
             source_lake_id: None,
+            river_source_x: None,
+            river_source_y: None,
             mouth_lake_id: None,
             area_mi2: None,
             max_depth_ft: None,
