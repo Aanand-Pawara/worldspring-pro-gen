@@ -1776,6 +1776,10 @@
       {plotsHere}
       onOpen={openNotebook}
       onAdd={addHere}
+      onRiver={(id) => {
+        const f = overlay?.features.find((g) => g.id === id);
+        if (f) select({ kind: 'feature', feature: f });
+      }}
       {...sel.kind === 'feature' && sel.feature.id.startsWith('c:') ? createdActions(sel.feature.id) : sel.kind === 'building' && drawnBuilding(sel.hit.id) ? createdActions(sel.hit.id) : {}}
       onFly={() => selection && flyToSelection(selection)}
       onClose={() => (selection = null)}

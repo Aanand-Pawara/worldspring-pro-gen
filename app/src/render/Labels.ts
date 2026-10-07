@@ -65,6 +65,7 @@ const STYLES: Record<string, KindStyle> = {
   pass: { size: 10, fill: INK, spacing: 0, symbol: ')(', minPx: 40, maxPx: 1e9, prio: 35 },
   waterfall: { size: 10, fill: WATER, spacing: 0, italic: true, symbol: '≋', minPx: 60, maxPx: 1e9, prio: 33 },
   river: { size: 11, fill: WATER, spacing: 1, italic: true, minPx: 220, maxPx: 1e9, prio: 30, rotate: true },
+  pond: { size: 9, fill: WATER, spacing: 0, symbol: '●', minPx: 8, maxPx: 1000, prio: 28 },
   metropolis: { size: 16, fill: INK, spacing: 3, upper: true, bold: true, symbol: '◉', minPx: 16, maxPx: 1e9, prio: 98, pin: true },
   city: { size: 14, fill: INK, spacing: 2, upper: true, bold: true, symbol: '●', minPx: 18, maxPx: 1e9, prio: 90, pin: true },
   town: { size: 12, fill: INK, spacing: 1, symbol: '●', minPx: 24, maxPx: 1e9, prio: 72, pin: true },
@@ -422,6 +423,13 @@ export class Labels {
 
   private create(it: Placed): Container {
     const { f, style } = it;
+    if (f.kind === 'pond') {
+      const pond = new Graphics();
+      pond.circle(0, 0, 4.5).fill({ color: 0x4b7d92, alpha: 0.82 }).stroke({ width: 1, color: 0xffffff, alpha: 0.7 });
+      it.text = pond;
+      this.container.addChild(pond);
+      return pond;
+    }
     if (style.badge) return this.createBadge(it);
     let label = style.upper ? f.name.toUpperCase() : f.name;
     if (style.symbol) label = `${style.symbol} ${label}`;

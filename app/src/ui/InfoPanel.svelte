@@ -24,6 +24,8 @@
     npcsHere: [string, Npc][];
     plotsHere: [string, Plot][];
     onOpen: (tab: 'npcs' | 'plots', id: string) => void;
+    /** Select a related river from a lake's hydrology list. */
+    onRiver: (id: string) => void;
     onAdd: (tab: 'npcs' | 'plots') => void;
     /** A created site: hide it from labels and search (or show it again), delete it, go down
      * into its site underground (if it has one). */
@@ -39,7 +41,7 @@
     /** Only the name, what it is and the actions (the sheet is down to its strip). */
     peek?: boolean;
   }
-  let { selection, renames, notes, settlementName, onRename, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, docked = false, peek = false }: Props = $props();
+  let { selection, renames, notes, settlementName, onRename, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, onRiver, hidden, onHide, onDelete, onDown, onGoIn, onEdit, docked = false, peek = false }: Props = $props();
   let cannot = $state(false);
   let confirmDelete = $state(false);
   /** The ⋯ menu (hide, delete). */
@@ -139,12 +141,33 @@
             <span>Tributaries</span><b>{f.tributary_count ?? 0}</b>
             <span>Mouth</span><b>{f.river_mouth ?? 'unknown'}</b>
           </div>
-        {:else if ['lake', 'salt_lake', 'salt_flat'].includes(f.kind)}
+        {:else if f.kind === 'lake' || f.kind === 'salt_lake' || f.kind === 'salt_flat'}
+          {#if f.inlet_rivers?.length || f.outlet_rivers?.length}
+            <div class="water-links">
+              <div class="links-title">River connections</div>
+              <div class="links-counts">
+                <span><b>{f.inlet_rivers?.length ?? 0}</b> ending here</span>
+                <span><b>{f.outlet_rivers?.length ?? 0}</b> starting here</span>
+              </div>
+              {#each f.inlet_rivers ?? [] as river (river.id)}
+                <button class="item river-link" onclick={() => onRiver(river.id)}><span class="arrow">↓</span><b>{river.name}</b><span class="muted">ends here</span></button>
+              {/each}
+              {#each f.outlet_rivers ?? [] as river (river.id)}
+                <button class="item river-link" onclick={() => onRiver(river.id)}><span class="arrow">→</span><b>{river.name}</b><span class="muted">starts here</span></button>
+              {/each}
+            </div>
+          {/if}
           <div class="metric-grid">
             <span>Area</span><b>{(f.area_mi2 ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} mi²</b>
             <span>Max depth</span><b>{Math.round(f.max_depth_ft ?? 0).toLocaleString()} ft</b>
             <span>Inlets</span><b>{f.inlet_count ?? 0}</b>
             <span>Outlet</span><b>{f.has_outlet ? 'yes' : 'terminal'}</b>
+          </div>
+        {/if}
+        {#if f.kind === 'river'}
+          <div class="river-endpoints">
+            <div><span>Birth</span><b>{f.source_name ?? 'unknown'}</b></div>
+            <div><span>Ends at</span><b>{f.mouth_name ?? 'unknown'}</b></div>
           </div>
         {/if}
         <div class="muted">{mi(f.x)} mi E, {mi(f.y)} mi S</div>
@@ -293,6 +316,20 @@
   }
   .metric-grid span { color: var(--ink-3); }
   .metric-grid b { font: 11px var(--mono); text-align: right; }
+  .water-links,
+  .river-endpoints {
+    padding-top: 5px;
+    margin-top: 3px;
+    border-top: 1px solid var(--line-faint);
+  }
+  .links-title { font-weight: 700; margin-bottom: 3px; }
+  .links-counts { display: flex; gap: 12px; color: var(--ink-2); font-size: 11px; margin-bottom: 2px; }
+  .river-link { width: 100%; text-align: left; }
+  .arrow { width: 14px; color: var(--water, #2f5367); }
+  .river-endpoints { display: grid; gap: 3px; }
+  .river-endpoints div { display: grid; grid-template-columns: 55px 1fr; gap: 6px; }
+  .river-endpoints span { color: var(--ink-3); }
+  .river-endpoints b { overflow: hidden; text-overflow: ellipsis; }
   .muted {
     color: var(--ink-3);
     font-size: 12px;

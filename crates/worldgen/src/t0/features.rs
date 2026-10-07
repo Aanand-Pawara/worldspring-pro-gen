@@ -62,6 +62,15 @@ pub struct Feature {
     pub river_source_y: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mouth_lake_id: Option<u32>,
+    pub source_name: Option<String>,
+    pub source_feature_id: Option<String>,
+    pub mouth_name: Option<String>,
+    pub mouth_feature_id: Option<String>,
+    pub inlet_rivers: Vec<FeatureLink>,
+    pub outlet_rivers: Vec<FeatureLink>,
+    pub hydro_lake_id: Option<u32>,
+    #[serde(skip)]
+    pub river_parent_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub area_mi2: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -76,6 +85,12 @@ pub struct Feature {
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Serialize)]
+pub struct FeatureLink {
+    pub id: String,
+    pub name: String,
+}
+
 pub struct Overlay {
     pub features: Vec<Feature>,
     pub kingdoms: Vec<super::politics::Kingdom>,
@@ -184,7 +199,7 @@ impl Builder<'_> {
             id.push('b');
         }
         let c = self.inp.cell_ft;
-        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, river_path: None, delta_paths: None, stream_order: None, drainage_area_mi2: None, discharge_index: None, tributary_count: None, length_mi: None, basin_id: None, river_mouth: None, source_lake_id: None, river_source_x: None, river_source_y: None, mouth_lake_id: None, area_mi2: None, max_depth_ft: None, inlet_count: None, has_outlet: None, kingdom_id: None, kingdom_name: None, political_rank: None });
+        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, river_path: None, delta_paths: None, stream_order: None, drainage_area_mi2: None, discharge_index: None, tributary_count: None, length_mi: None, basin_id: None, river_mouth: None, source_lake_id: None, river_source_x: None, river_source_y: None, mouth_lake_id: None, source_name: None, source_feature_id: None, mouth_name: None, mouth_feature_id: None, inlet_rivers: Vec::new(), outlet_rivers: Vec::new(), hydro_lake_id: None, river_parent_index: None, area_mi2: None, max_depth_ft: None, inlet_count: None, has_outlet: None, kingdom_id: None, kingdom_name: None, political_rank: None });
         id
     }
 
@@ -462,7 +477,7 @@ impl Builder<'_> {
         let lakes = inp.hydro.lakes.clone();
         let water: Vec<bool> = (0..inp.w * inp.h).map(|k| inp.hydro.lake_of[k] == super::hydro::NO_LAKE).collect();
         let inside = distance_to(inp.w, inp.h, &water);
-        for lake in &lakes {
+        for (lake_id, lake) in lakes.iter().enumerate() {
             if lake.cells.len() < 4 {
                 continue;
             }
@@ -487,6 +502,7 @@ impl Builder<'_> {
                 f.max_depth_ft = Some(lake.max_depth_ft);
                 f.inlet_count = Some(lake.inlet_count);
                 f.has_outlet = Some(lake.outlet.is_some());
+                f.hydro_lake_id = Some(lake_id as u32);
             }
         }
     }
@@ -559,6 +575,32 @@ impl Builder<'_> {
                     f.river_source_x = Some((r.source_cell as usize % w) as f64 * inp.cell_ft);
                     f.river_source_y = Some((r.source_cell as usize / w) as f64 * inp.cell_ft);
                     f.mouth_lake_id = r.mouth_lake;
+                    f.river_parent_index = r.into;
+                    if let Some(lake_id) = r.source_lake {
+                        if let Some(lake) = self.out.features.iter().find(|g| g.kind == "lake" && g.hydro_lake_id == Some(lake_id)) {
+                            f.source_feature_id = Some(lake.id.clone());
+                            f.source_name = Some(lake.name.clone());
+                        }
+                    }
+                    if let Some(lake_id) = r.mouth_lake {
+                        if let Some(lake) = self.out.features.iter().find(|g| g.kind == "lake" && g.hydro_lake_id == Some(lake_id)) {
+                            f.mouth_feature_id = Some(lake.id.clone());
+                            f.mouth_name = Some(lake.name.clone());
+                        }
+                    }
+                    if r.mouth == Mouth::Ocean {
+                        let cell = r.terminal_receiver.unwrap_or(r.cells[r.cells.len() - 1]);
+                        if let Some(water) = self.out.features.iter().filter(|g| g.kind == "ocean" || g.kind == "sea").min_by(|a,b| {
+                            let cx = (cell as usize % w) as f64 * inp.cell_ft;
+                            let cy = (cell as usize / w) as f64 * inp.cell_ft;
+                            let da = (a.x-cx)*(a.x-cx)+(a.y-cy)*(a.y-cy);
+                            let db = (b.x-cx)*(b.x-cx)+(b.y-cy)*(b.y-cy);
+                            da.total_cmp(&db)
+                        }) {
+                            f.mouth_feature_id = Some(water.id.clone());
+                            f.mouth_name = Some(water.name.clone());
+                        }
+                    }
                 }
             }
             let _ = q;
@@ -659,6 +701,60 @@ impl Builder<'_> {
             let elev = self.above_sea(c);
             self.push("waterfall", NameKind::Waterfall, cx, cy, 0.0, 30.0 * inp.cell_ft, Some(elev.round()), Some(format!("drop ~{} ft", fmt_thousands(drop))));
         }
+        let river_sources: Vec<(String, f64, f64, f64)> = self.out.features.iter()
+            .filter(|f| f.kind == "river" && f.source_lake_id.is_none())
+            .map(|f| (f.id.clone(), f.river_source_x.unwrap_or(f.x), f.river_source_y.unwrap_or(f.y), f.extent_ft))
+            .collect();
+        for (river_id, x, y, _) in river_sources {
+            let pond_id = format!("{river_id}:source-pond");
+            self.out.features.push(Feature {
+                id: pond_id.clone(), kind: "pond", name: String::new(), x, y, angle: 0.0,
+                extent_ft: (inp.cell_ft * 1.8).max(80.0), elev_ft: None, detail: None,
+                river_path: None, delta_paths: None, stream_order: None, drainage_area_mi2: None,
+                discharge_index: None, tributary_count: None, length_mi: None, basin_id: None,
+                river_mouth: None, source_lake_id: None, river_source_x: None, river_source_y: None,
+                mouth_lake_id: None, source_name: None, source_feature_id: None, mouth_name: None,
+                mouth_feature_id: None, inlet_rivers: Vec::new(), outlet_rivers: Vec::new(), hydro_lake_id: None,
+                river_parent_index: None, area_mi2: None, max_depth_ft: None, inlet_count: None, has_outlet: None,
+                kingdom_id: None, kingdom_name: None, political_rank: None,
+            });
+            if let Some(river) = self.out.features.iter_mut().find(|f| f.id == river_id) {
+                river.source_feature_id = Some(pond_id);
+                river.source_name = Some("Small unnamed pond".to_string());
+            }
+        }
+        let parent_links: Vec<(String, usize)> = self.out.features.iter()
+            .filter_map(|f| f.river_parent_index.map(|p| (f.id.clone(), p)))
+            .collect();
+        let river_ids: Vec<String> = self.out.features.iter().filter(|f| f.kind == "river").map(|f| f.id.clone()).collect();
+        for (river_id, parent) in parent_links {
+            if let Some(parent_id) = river_ids.get(parent).cloned() {
+                if let Some(parent_feature) = self.out.features.iter().find(|f| f.id == parent_id) {
+                    let name = parent_feature.name.clone();
+                    if let Some(river) = self.out.features.iter_mut().find(|f| f.id == river_id) {
+                        river.mouth_feature_id = Some(parent_id);
+                        river.mouth_name = Some(name);
+                    }
+                }
+            }
+        }
+        let river_links: Vec<(String, String, Option<u32>, Option<u32>)> = self.out.features.iter()
+            .filter(|f| f.kind == "river")
+            .map(|f| (f.id.clone(), f.name.clone(), f.source_lake_id, f.mouth_lake_id))
+            .collect();
+        for (id, name, source_lake, mouth_lake) in river_links {
+            if let Some(lake_id) = source_lake {
+                if let Some(lake) = self.out.features.iter_mut().find(|f| f.kind == "lake" && f.hydro_lake_id == Some(lake_id)) {
+                    lake.outlet_rivers.push(FeatureLink { id: id.clone(), name: name.clone() });
+                }
+            }
+            if let Some(lake_id) = mouth_lake {
+                if let Some(lake) = self.out.features.iter_mut().find(|f| f.kind == "lake" && f.hydro_lake_id == Some(lake_id)) {
+                    lake.inlet_rivers.push(FeatureLink { id, name });
+                }
+            }
+        }
+
         rapids.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.3.cmp(&b.3)));
         let mut placed = Vec::<(f64, f64)>::new();
         let min_sep = 6.0 * inp.cell_ft;
