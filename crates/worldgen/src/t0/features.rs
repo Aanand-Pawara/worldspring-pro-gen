@@ -828,8 +828,9 @@ fn build_delta_paths(
     let ox = (ocean % w) as f64;
     let oy = (ocean / w) as f64;
 
-    // Use several upstream cells for the terminal bearing. A single D8 step can point
-    // toward a nearby parallel river and make the delta fan run backwards.
+    // The parent river and its ocean receiver define the downstream axis. Use several
+    // upstream cells to suppress a one-cell D8 zig-zag, but fall back to the actual receiver
+    // when the sampled tangent disagrees with the coast-facing direction.
     let back = river.cells.len().saturating_sub(5);
     let anchor = river.cells[back] as usize;
     let mut fx = mx - (anchor % w) as f64;
@@ -843,20 +844,28 @@ fn build_delta_paths(
     let olen = crate::core::sqrt(odx * odx + ody * ody).max(1e-6);
     let ofx = odx / olen;
     let ofy = ody / olen;
-    let bearing_dot = fx * ofx + fy * ofy;
-    if bearing_dot < 0.20 { return None; }
-    fx = 0.82 * fx + 0.18 * ofx;
-    fy = 0.82 * fy + 0.18 * ofy;
-    let fl = crate::core::sqrt(fx * fx + fy * fy).max(1e-6);
-    fx /= fl;
-    fy /= fl;
+    if fx * ofx + fy * ofy < 0.20 {
+        fx = ofx;
+        fy = ofy;
+    } else {
+        fx = 0.75 * fx + 0.25 * ofx;
+        fy = 0.75 * fy + 0.25 * ofy;
+        let fl = crate::core::sqrt(fx * fx + fy * fy).max(1e-6);
+        fx /= fl;
+        fy /= fl;
+    }
 
     let mouth_z = inp.height[mouth];
     let strength = (river.q.last().copied().unwrap_or(river.peak_discharge) as f64
         / super::hydro::RIVER_Q).max(1.0);
-    let radius = (14.0 + 3.0 * crate::core::sqrt(strength)).round() as usize;
-    let radius = radius.clamp(14, 30);
+    // Keep the fan tied to channel scale. Extremely large arbitrary radii were allowing
+    // branches to search far inland and create disconnected-looking fingers.
+    let radius = (10.0 + 2.2 * crate::core::sqrt(strength)).round() as usize;
+    let radius = radius.clamp(10, 24);
 
+    // A delta branch must not cross an existing unrelated river. The parent river itself is
+    // also blocked, except at the bifurcation cell, so branches leave the mouth instead of
+    // walking upstream along the parent channel.
     let mut blocked = vec![false; w * h];
     for other in &inp.hydro.rivers {
         if other.source_cell == river.source_cell { continue; }
@@ -866,10 +875,18 @@ fn build_delta_paths(
             for (nb, _) in neighbors(w, h, c) { blocked[nb] = true; }
         }
     }
+    for &c in &river.cells {
+        let c = c as usize;
+        blocked[c] = true;
+        for (nb, _) in neighbors(w, h, c) { blocked[nb] = true; }
+    }
+    blocked[mouth] = false;
 
-    // Choose actual shoreline targets around the river mouth. This removes the old failure
-    // mode where one arbitrary ocean cell dictated the entire fan's shape.
-    let mut targets = Vec::<(f64, usize)>::new();
+    // Find genuine shoreline targets. Instead of accepting whichever cells happen to sort
+    // first, select targets around physically plausible bifurcation bearings. Field and
+    // experimental deltas cluster around a ~70° daughter-channel bifurcation angle.
+    let forward_angle = libm::atan2(fy, fx);
+    let mut targets = Vec::<(f64, f64, usize)>::new();
     for y in my as isize - radius as isize..=my as isize + radius as isize {
         if y < 0 || y >= h as isize { continue; }
         for x in mx as isize - radius as isize..=mx as isize + radius as isize {
@@ -877,16 +894,20 @@ fn build_delta_paths(
             let k = y as usize * w + x as usize;
             if inp.land[k] || !neighbors(w, h, k).any(|(nb, _)| inp.land[nb]) { continue; }
             if neighbors(w, h, k).any(|(nb, _)| inp.land[nb] && blocked[nb]) { continue; }
+
             let vx = x as f64 - mx;
             let vy = y as f64 - my;
             let d = crate::core::sqrt(vx * vx + vy * vy);
             if d < 4.0 || d > radius as f64 { continue; }
-            let along = (vx * fx + vy * fy) / d;
-            if along < 0.20 { continue; }
-            let forward_angle = libm::atan2(fy, fx);
-            let mut da = libm::atan2(vy, vx) - forward_angle;
+
+            let angle = libm::atan2(vy, vx);
+            let mut da = angle - forward_angle;
             while da > std::f64::consts::PI { da -= std::f64::consts::TAU; }
             while da < -std::f64::consts::PI { da += std::f64::consts::TAU; }
+            if da.abs() > 1.35 { continue; }
+
+            let along = (vx * fx + vy * fy) / d;
+            if along < 0.35 { continue; }
 
             let coast_z = neighbors(w, h, k)
                 .filter(|(nb, _)| inp.land[*nb] && inp.hydro.lake_of[*nb] == super::hydro::NO_LAKE)
@@ -895,31 +916,46 @@ fn build_delta_paths(
             let grade = ((mouth_z - coast_z).max(0.0)) / (d * cell_ft).max(cell_ft);
             if !grade.is_finite() || grade > super::hydro::DELTA_MAX_GRADE { continue; }
 
-            // Compact lobate fan: downstream targets are preferred, but branch separation
-            // remains strong enough to create visible interdistributary space.
-            let score = d + 2.2 * da.abs() * radius as f64 - 3.0 * along * radius as f64;
-            targets.push((score, k));
+            // Prefer nearby shoreline, downstream targets with low angular error, and targets
+            // whose approach is not already occupied by another river.
+            let score = d + 3.5 * da.abs() * radius as f64 - 2.0 * along * radius as f64;
+            targets.push((score, da, k));
         }
     }
-    targets.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    targets.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.2.cmp(&b.2)));
+
+    // Two daughter channels are the normal case. Very large rivers may support three, but
+    // they still branch around the same mouth-bar apex rather than spawning many parallel
+    // upstream lines.
+    let branch_count = desired.min(3).max(2);
+    let ideal_angles: &[f64] = if branch_count == 2 {
+        &[-0.6283185307179586, 0.6283185307179586] // ±36°, 72° total bifurcation
+    } else {
+        &[-0.8726646259971648, 0.0, 0.8726646259971648] // ±50° plus a central arm
+    };
 
     let mut chosen = Vec::<usize>::new();
-    for &(_, target) in &targets {
-        if chosen.len() >= desired { break; }
-        let ta = libm::atan2((target / w) as f64 - my, (target % w) as f64 - mx);
-        let separated = chosen.iter().all(|&other| {
-            let oa = libm::atan2((other / w) as f64 - my, (other % w) as f64 - mx);
-            let mut d = (ta - oa).abs();
-            while d > std::f64::consts::PI { d = std::f64::consts::TAU - d; }
-            d >= 0.62
-        });
-        if separated { chosen.push(target); }
+    for &ideal in ideal_angles {
+        let mut best: Option<(f64, usize)> = None;
+        for &(score, da, target) in &targets {
+            if chosen.contains(&target) { continue; }
+            let angular_error = (da - ideal).abs();
+            if angular_error > 0.42 { continue; }
+            let candidate = score + angular_error * 5.0 * radius as f64;
+            if best.is_none_or(|b| candidate < b.0) {
+                best = Some((candidate, target));
+            }
+        }
+        if let Some((_, target)) = best {
+            chosen.push(target);
+        }
     }
     if chosen.len() < 2 { return None; }
 
-    // Attach bifurcation to the actual terminal river reach, never to an unrelated land cell.
-    let branch_back = (3 + (crate::core::sqrt(strength) as usize).min(3)).min(river.cells.len().saturating_sub(1));
-    let branch_start = river.cells[river.cells.len() - 1 - branch_back] as usize;
+    // The bifurcation happens at the actual river mouth. Starting several cells upstream was
+    // producing artificial parallel channels and made the delta look like a forked river
+    // rather than daughter distributaries around a mouth bar.
+    let branch_start = mouth;
 
     let mut used = vec![false; w * h];
     let mut paths = Vec::with_capacity(chosen.len());
@@ -931,6 +967,7 @@ fn build_delta_paths(
             }
         }
         goals.sort_unstable();
+
         let mut best: Option<Vec<usize>> = None;
         for goal in goals {
             if let Some(path) = delta_route(inp, branch_start, goal, &used, &blocked, radius + 4, fx, fy) {
@@ -941,7 +978,8 @@ fn build_delta_paths(
         }
         let Some(path) = best else { continue; };
 
-        // Reserve a small corridor around each distributary, not just its center cells.
+        // Reserve the branch corridor so later daughter channels form separate bars/islands
+        // instead of collapsing into nearly coincident parallel lines.
         for &cell in &path {
             used[cell] = true;
             for (nb, _) in neighbors(w, h, cell) { used[nb] = true; }
@@ -951,13 +989,17 @@ fn build_delta_paths(
             [(k % w) as f64 * cell_ft, (k / w) as f64 * cell_ft]
         }).collect::<Vec<_>>();
         points.push([(target % w) as f64 * cell_ft, (target / w) as f64 * cell_ft]);
+
+        // The route already follows terrain and the intended bifurcation bearing. One light
+        // Chaikin pass removes grid stair-steps without adding the large meander field used by
+        // ordinary rivers.
         let weights = vec![1.0f32; points.len()];
         let (smooth, _) = chaikin(&points, &weights, 1);
         if smooth.len() >= 3 { paths.push(smooth); } else { paths.push(points); }
     }
+
     (paths.len() >= 2).then_some(paths)
 }
-
 fn delta_route(
     inp: &Inputs,
     start: usize,
@@ -999,7 +1041,9 @@ fn delta_route(
             if nx < min_x || nx > max_x || ny < min_y || ny > max_y { continue; }
             let step = if diagonal > 1.0 { 141u64 } else { 100u64 };
             let rise = (inp.height[nb] - inp.height[cur]).max(0.0);
-            if rise > inp.cell_ft * 0.12 { continue; }
+            // Delta distributaries are built on a very low-gradient plain. Do not let A*
+            // climb over terrain merely because the cell is closer to the shoreline target.
+            if rise > inp.cell_ft * 0.04 { continue; }
 
             // A distributary can meander sideways, but it cannot walk materially back up the
             // river's downstream bearing. This prevents the old "upward delta" artifact where
@@ -1010,10 +1054,10 @@ fn delta_route(
             let next_dy = ny as f64 - sy as f64;
             let cur_projection = cur_dx * flow_x + cur_dy * flow_y;
             let next_projection = next_dx * flow_x + next_dy * flow_y;
-            if next_projection + 0.35 < cur_projection { continue; }
+            if next_projection + 0.15 < cur_projection { continue; }
 
             let forward_step = (nx as f64 - cx as f64) * flow_x + (ny as f64 - cy as f64) * flow_y;
-            let direction_cost = if forward_step < 0.05 { 1_500u64 } else { 0u64 };
+            let direction_cost = if forward_step < -0.15 { 2_500u64 } else if forward_step < 0.05 { 800u64 } else { 0u64 };
             let slope_cost = (rise / inp.cell_ft * 2400.0) as u64;
             let reuse_cost = if used[nb] && nb != start { 50_000 } else { 0 };
             let g = base.saturating_add(step + slope_cost + reuse_cost + direction_cost);
@@ -1022,7 +1066,7 @@ fn delta_route(
             prev[nb] = cur as u32;
             let dx = gx as f64 - nx as f64;
             let dy = gy as f64 - ny as f64;
-            let heuristic = (crate::core::sqrt(dx * dx + dy * dy) * 100.0) as u64;
+            let heuristic = (crate::core::sqrt(dx * dx + dy * dy) * 140.0) as u64;
             heap.push(Reverse((g.saturating_add(heuristic), nb as u32)));
         }
     }
