@@ -395,14 +395,9 @@ impl T0 {
                     height[gy * w + gx] as f32
                 }).collect::<Vec<_>>();
 
-                // The path already contains the intended delta curvature. Keep RiverCurve's
-                // additional meander subtle so distributaries read as sedimentary channels.
-                let taper = (0..n)
-                    .map(|i| {
-                        let t = i as f64 / (n - 1) as f64;
-                        (0.10 + 0.10 * libm::sin(t * std::f64::consts::PI)) as f32
-                    })
-                    .collect::<Vec<_>>();
+                // Delta paths already contain their terrain-aware planform. Do not apply
+                // the ordinary river meander field on top of a designed distributary.
+                let taper = vec![0.0f32; n];
 
                 river_curves.push(RiverCurve::new(
                     pts,

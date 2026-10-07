@@ -828,14 +828,12 @@ fn build_delta_paths(
     let ox = (ocean % w) as f64;
     let oy = (ocean / w) as f64;
 
-    // A delta is a low-gradient depositional continuation of the river, not a radial fan
-    // centered on an arbitrary ocean receiver. The terminal river bearing is authoritative.
-    let (mut fx, mut fy) = if river.cells.len() >= 2 {
-        let prev = river.cells[river.cells.len() - 2] as usize;
-        (mx - (prev % w) as f64, my - (prev / w) as f64)
-    } else {
-        (ox - mx, oy - my)
-    };
+    // Use several upstream cells for the terminal bearing. A single D8 step can point
+    // toward a nearby parallel river and make the delta fan run backwards.
+    let back = river.cells.len().saturating_sub(5);
+    let anchor = river.cells[back] as usize;
+    let mut fx = mx - (anchor % w) as f64;
+    let mut fy = my - (anchor / w) as f64;
     let fl = crate::core::sqrt(fx * fx + fy * fy).max(1e-6);
     fx /= fl;
     fy /= fl;
@@ -845,16 +843,29 @@ fn build_delta_paths(
     let olen = crate::core::sqrt(odx * odx + ody * ody).max(1e-6);
     let ofx = odx / olen;
     let ofy = ody / olen;
-    if fx * ofx + fy * ofy < 0.15 {
-        fx = ofx;
-        fy = ofy;
-    }
+    let bearing_dot = fx * ofx + fy * ofy;
+    if bearing_dot < 0.20 { return None; }
+    fx = 0.82 * fx + 0.18 * ofx;
+    fy = 0.82 * fy + 0.18 * ofy;
+    let fl = crate::core::sqrt(fx * fx + fy * fy).max(1e-6);
+    fx /= fl;
+    fy /= fl;
 
     let mouth_z = inp.height[mouth];
     let strength = (river.q.last().copied().unwrap_or(river.peak_discharge) as f64
         / super::hydro::RIVER_Q).max(1.0);
-    let radius = (10.0 + 2.2 * crate::core::sqrt(strength)).round() as usize;
-    let radius = radius.clamp(10, 22);
+    let radius = (14.0 + 3.0 * crate::core::sqrt(strength)).round() as usize;
+    let radius = radius.clamp(14, 30);
+
+    let mut blocked = vec![false; w * h];
+    for other in &inp.hydro.rivers {
+        if other.source_cell == river.source_cell { continue; }
+        for &c in &other.cells {
+            let c = c as usize;
+            blocked[c] = true;
+            for (nb, _) in neighbors(w, h, c) { blocked[nb] = true; }
+        }
+    }
 
     // Choose actual shoreline targets around the river mouth. This removes the old failure
     // mode where one arbitrary ocean cell dictated the entire fan's shape.
@@ -865,6 +876,7 @@ fn build_delta_paths(
             if x < 0 || x >= w as isize { continue; }
             let k = y as usize * w + x as usize;
             if inp.land[k] || !neighbors(w, h, k).any(|(nb, _)| inp.land[nb]) { continue; }
+            if neighbors(w, h, k).any(|(nb, _)| inp.land[nb] && blocked[nb]) { continue; }
             let vx = x as f64 - mx;
             let vy = y as f64 - my;
             let d = crate::core::sqrt(vx * vx + vy * vy);
@@ -899,14 +911,15 @@ fn build_delta_paths(
             let oa = libm::atan2((other / w) as f64 - my, (other % w) as f64 - mx);
             let mut d = (ta - oa).abs();
             while d > std::f64::consts::PI { d = std::f64::consts::TAU - d; }
-            d >= 0.52
+            d >= 0.62
         });
         if separated { chosen.push(target); }
     }
     if chosen.len() < 2 { return None; }
 
     // Attach bifurcation to the actual terminal river reach, never to an unrelated land cell.
-    let branch_start = river.cells.get(river.cells.len().saturating_sub(2)).copied().map(|c| c as usize).unwrap_or(mouth);
+    let branch_back = (3 + (crate::core::sqrt(strength) as usize).min(3)).min(river.cells.len().saturating_sub(1));
+    let branch_start = river.cells[river.cells.len() - 1 - branch_back] as usize;
 
     let mut used = vec![false; w * h];
     let mut paths = Vec::with_capacity(chosen.len());
@@ -950,6 +963,7 @@ fn delta_route(
     start: usize,
     goal: usize,
     used: &[bool],
+    blocked: &[bool],
     radius: usize,
     flow_x: f64,
     flow_y: f64,
@@ -979,6 +993,7 @@ fn delta_route(
         if base == u64::MAX { continue; }
         for (nb, diagonal) in neighbors(w, h, cur) {
             if !inp.land[nb] || inp.hydro.lake_of[nb] != super::hydro::NO_LAKE { continue; }
+            if blocked[nb] && nb != start { continue; }
             let nx = nb % w;
             let ny = nb / w;
             if nx < min_x || nx > max_x || ny < min_y || ny > max_y { continue; }
