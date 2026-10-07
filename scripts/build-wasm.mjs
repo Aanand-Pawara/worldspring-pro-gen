@@ -6,7 +6,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const run = (cmd, args) => execFileSync(cmd, args, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' });
+// GitHub CI: avoid Rust's expensive single-unit WASM LTO pass. wasm-opt -O3 still performs the final
+// semantics-preserving optimization, while parallel codegen makes the compile/link phase much faster.
+const cargoEnv = process.env.CI === 'true'
+  ? { ...process.env, CARGO_PROFILE_WASM_LTO: 'false', CARGO_PROFILE_WASM_CODEGEN_UNITS: '16' }
+  : process.env;
+const run = (cmd, args) => execFileSync(cmd, args, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32', env: cargoEnv });
 
 run('cargo', ['build', '-p', 'worldgen-wasm', '--profile', 'wasm', '--target', 'wasm32-unknown-unknown']);
 // Features rustc's wasm32 target emits (plus simd128 from .cargo/config.toml). Not --all-features:
