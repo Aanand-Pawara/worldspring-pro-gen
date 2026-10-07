@@ -66,8 +66,11 @@ pub struct Feature {
     pub source_feature_id: Option<String>,
     pub mouth_name: Option<String>,
     pub mouth_feature_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub inlet_rivers: Vec<FeatureLink>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub outlet_rivers: Vec<FeatureLink>,
+    #[serde(skip)]
     pub hydro_lake_id: Option<u32>,
     #[serde(skip)]
     pub river_parent_index: Option<usize>,
