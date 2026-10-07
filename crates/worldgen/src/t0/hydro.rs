@@ -522,42 +522,74 @@ fn lake_ocean_spill_path(
     w: usize, h: usize, land: &[bool], lake_of: &[u32], filled: &[f64], source_level: f64,
     max_radius: usize, boundary: &[u32], bound: (usize, usize, usize, usize),
 ) -> Option<(u32, Vec<u32>, u32)> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    // Treat the outlet as a spill saddle problem. The lowest coastal saddle wins; distance
+    // only breaks ties, which is much closer to how a natural lake finds its outlet.
     let min_x = bound.0.saturating_sub(max_radius);
     let min_y = bound.1.saturating_sub(max_radius);
     let max_x = (bound.2 + max_radius + 1).min(w);
     let max_y = (bound.3 + max_radius + 1).min(h);
     if min_x >= max_x || min_y >= max_y { return None; }
-    let bw = max_x - min_x;
-    let bh = max_y - min_y;
-    let local = |c: usize| -> usize { (c / w - min_y) * bw + (c % w - min_x) };
+
+    let bw = max_x - min_x; let bh = max_y - min_y;
+    let local = |cell: usize| -> usize { (cell / w - min_y) * bw + (cell % w - min_x) };
     let global = |k: usize| -> usize { min_y + k / bw * w + min_x + k % bw };
     const ROOT: u32 = u32::MAX - 1;
     let mut parent = vec![u32::MAX; bw * bh];
     let mut source_cell = vec![u32::MAX; bw * bh];
-    let mut queue = VecDeque::new();
+    let mut best_saddle = vec![u64::MAX; bw * bh];
+    let mut best_cost = vec![u64::MAX; bw * bh];
+    let mut heap = BinaryHeap::<Reverse<(u64, u64, usize)>>::new();
+
     for &lake_cell in boundary {
         for (nb, _) in neighbors(w, h, lake_cell as usize) {
             if !land[nb] || lake_of[nb] != NO_LAKE { continue; }
             let x = nb % w; let y = nb / w;
-            if x < min_x || x >= max_x || y < min_y || y >= max_y || filled[nb] > source_level + 2.0 { continue; }
+            if x < min_x || x >= max_x || y < min_y || y >= max_y || filled[nb] > source_level + 1.0 { continue; }
             let k = local(nb);
-            if parent[k] != u32::MAX { continue; }
-            parent[k] = ROOT; source_cell[k] = lake_cell; queue.push_back(nb);
+            let saddle = (filled[nb].max(source_level) * 100.0).max(0.0) as u64;
+            if saddle < best_saddle[k] {
+                best_saddle[k] = saddle;
+                best_cost[k] = 0;
+                parent[k] = ROOT;
+                source_cell[k] = lake_cell;
+                heap.push(Reverse((saddle, 0, k)));
+            }
         }
     }
-    while let Some(cur) = queue.pop_front() {
-        for (nb, _) in neighbors(w, h, cur) {
+
+    while let Some(Reverse((saddle, cost, key))) = heap.pop() {
+        if saddle != best_saddle[key] || cost != best_cost[key] { continue; }
+        let cur = global(key);
+        for (nb, dist) in neighbors(w, h, cur) {
             if nb % w < min_x || nb % w >= max_x || nb / w < min_y || nb / w >= max_y { continue; }
+
             if !land[nb] {
-                let mut path = vec![cur as u32]; let mut k = local(cur);
-                while parent[k] != ROOT { let p = parent[k] as usize; path.push(global(p) as u32); k = p; }
+                let mut path = vec![cur as u32];
+                let mut k = key;
+                while parent[k] != ROOT {
+                    let p = parent[k] as usize;
+                    path.push(global(p) as u32);
+                    k = p;
+                }
                 path.reverse();
                 return Some((source_cell[k], path, nb as u32));
             }
-            if lake_of[nb] != NO_LAKE || filled[nb] > source_level + 2.0 || filled[nb] > filled[cur] + 0.5 { continue; }
+
+            if lake_of[nb] != NO_LAKE || filled[nb] > source_level + 1.0 || filled[nb] > filled[cur] + 1.0 { continue; }
+            let next_saddle = saddle.max((filled[nb] * 100.0).max(0.0) as u64);
+            let uphill = (filled[nb] - filled[cur]).max(0.0);
+            let next_cost = cost
+                .saturating_add((dist * 100.0) as u64)
+                .saturating_add((uphill * 500.0) as u64);
             let k = local(nb);
-            if parent[k] != u32::MAX { continue; }
-            parent[k] = local(cur) as u32; queue.push_back(nb);
+            if (next_saddle, next_cost) >= (best_saddle[k], best_cost[k]) { continue; }
+            best_saddle[k] = next_saddle;
+            best_cost[k] = next_cost;
+            parent[k] = key as u32;
+            heap.push(Reverse((next_saddle, next_cost, k)));
         }
     }
     None
@@ -639,7 +671,7 @@ fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], fille
             && lake_reaches_ocean(source, land, lake_of, rec, lakes);
         if source_already_ocean { continue; }
 
-        let mut candidates: Vec<(bool, bool, usize, usize)> = Vec::new();
+        let mut candidates: Vec<(bool, bool, f64, usize, usize)> = Vec::new();
         for target in 0..lakes.len() {
             if target == source || lakes[target].level_ft >= lakes[source].level_ft - MIN_LEVEL_DROP_FT {
                 continue;
@@ -652,14 +684,16 @@ fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], fille
             // is still a valid target. It will be connected farther downstream later.
             let ocean_connected = lakes[target].outlet.is_some()
                 && lake_reaches_ocean(target, land, lake_of, rec, lakes);
-            candidates.push((ocean_connected, lakes[target].outlet.is_some(), proximity, target));
+            let level_drop = lakes[source].level_ft - lakes[target].level_ft;
+            candidates.push((ocean_connected, lakes[target].outlet.is_some(), level_drop, proximity, target));
         }
 
         candidates.sort_by(|a, b| {
             b.0.cmp(&a.0)
                 .then(b.1.cmp(&a.1))
-                .then(a.2.cmp(&b.2))
+                .then(b.2.total_cmp(&a.2))
                 .then(a.3.cmp(&b.3))
+                .then(a.4.cmp(&b.4))
         });
 
         // Try a small deterministic shortlist. The bounded spill search does the expensive
@@ -743,6 +777,11 @@ fn lake_spill_path(
     w: usize, h: usize, land: &[bool], lake_of: &[u32], filled: &[f64], source_level: f64,
     source_boundary: &[u32], target_boundary: &[u32], target_id: u32,
 ) -> Option<(u32, Vec<u32>, u32)> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    // A real spill follows the lowest saddle first, not the first cell reached by BFS.
+    // This prevents long, nearly-flat "scratch" channels from crossing arbitrary terrain.
     let mut min_x = w; let mut min_y = h; let mut max_x = 0usize; let mut max_y = 0usize;
     for &c in source_boundary.iter().chain(target_boundary.iter()) {
         let x = c as usize % w; let y = c as usize / w;
@@ -752,35 +791,43 @@ fn lake_spill_path(
     min_x = min_x.saturating_sub(margin); min_y = min_y.saturating_sub(margin);
     max_x = (max_x + margin + 1).min(w); max_y = (max_y + margin + 1).min(h);
     if min_x >= max_x || min_y >= max_y { return None; }
+
     let bw = max_x - min_x; let bh = max_y - min_y;
-    let local = |c: usize| -> usize { (c / w - min_y) * bw + (c % w - min_x) };
+    let local = |cell: usize| -> usize { (cell / w - min_y) * bw + (cell % w - min_x) };
     let global = |k: usize| -> usize { min_y + k / bw * w + min_x + k % bw };
+    const ROOT: u32 = u32::MAX - 1;
     let mut parent = vec![u32::MAX; bw * bh];
     let mut source_cell = vec![u32::MAX; bw * bh];
-    let mut queue = VecDeque::new();
-    const ROOT: u32 = u32::MAX - 1;
+    let mut best_saddle = vec![u64::MAX; bw * bh];
+    let mut best_cost = vec![u64::MAX; bw * bh];
+    let mut heap = BinaryHeap::<Reverse<(u64, u64, usize)>>::new();
 
     for &lake_cell in source_boundary {
-        let c = lake_cell as usize;
-        for (nb, _) in neighbors(w, h, c) {
+        for (nb, _) in neighbors(w, h, lake_cell as usize) {
             if !land[nb] || lake_of[nb] != NO_LAKE { continue; }
             let x = nb % w; let y = nb / w;
-            if x < min_x || x >= max_x || y < min_y || y >= max_y { continue; }
-            if filled[nb] > source_level + 2.0 { continue; }
+            if x < min_x || x >= max_x || y < min_y || y >= max_y || filled[nb] > source_level + 1.0 { continue; }
             let k = local(nb);
-            if parent[k] != u32::MAX { continue; }
-            parent[k] = ROOT;
-            source_cell[k] = lake_cell;
-            queue.push_back(nb);
+            let saddle = (filled[nb].max(source_level) * 100.0).max(0.0) as u64;
+            if saddle < best_saddle[k] {
+                best_saddle[k] = saddle;
+                best_cost[k] = 0;
+                parent[k] = ROOT;
+                source_cell[k] = lake_cell;
+                heap.push(Reverse((saddle, 0, k)));
+            }
         }
     }
 
-    while let Some(cur) = queue.pop_front() {
-        for (nb, _) in neighbors(w, h, cur) {
+    while let Some(Reverse((saddle, cost, key))) = heap.pop() {
+        if saddle != best_saddle[key] || cost != best_cost[key] { continue; }
+        let cur = global(key);
+        for (nb, dist) in neighbors(w, h, cur) {
             if nb % w < min_x || nb % w >= max_x || nb / w < min_y || nb / w >= max_y { continue; }
+
             if lake_of[nb] == target_id {
                 let mut path = vec![cur as u32];
-                let mut k = local(cur);
+                let mut k = key;
                 while parent[k] != ROOT {
                     let p = parent[k] as usize;
                     path.push(global(p) as u32);
@@ -789,16 +836,21 @@ fn lake_spill_path(
                 path.reverse();
                 return Some((source_cell[k], path, nb as u32));
             }
-            if !land[nb] || lake_of[nb] != NO_LAKE || filled[nb] > source_level + 2.0 { continue; }
-            // A river can spill across a flat saddle, but it cannot climb a real rise.
-            if filled[nb] > filled[cur] + 0.5 { continue; }
+
+            if !land[nb] || lake_of[nb] != NO_LAKE || filled[nb] > source_level + 1.0 { continue; }
+            if filled[nb] > filled[cur] + 1.0 { continue; }
+
+            let next_saddle = saddle.max((filled[nb] * 100.0).max(0.0) as u64);
+            let uphill = (filled[nb] - filled[cur]).max(0.0);
+            let next_cost = cost
+                .saturating_add((dist * 100.0) as u64)
+                .saturating_add((uphill * 500.0) as u64);
             let k = local(nb);
-            if parent[k] != u32::MAX { continue; }
-            // `parent` is indexed in the local bounding box, so keep parent links in
-            // that same coordinate space. Storing a global cell here corrupts the walk
-            // as soon as the spill search starts away from row/column zero.
-            parent[k] = local(cur) as u32;
-            queue.push_back(nb);
+            if (next_saddle, next_cost) >= (best_saddle[k], best_cost[k]) { continue; }
+            best_saddle[k] = next_saddle;
+            best_cost[k] = next_cost;
+            parent[k] = key as u32;
+            heap.push(Reverse((next_saddle, next_cost, k)));
         }
     }
     None
@@ -891,6 +943,9 @@ fn recompute_final_discharge(
         }
 
         q[i] += runoff;
+        if clim.precip[i] < 400.0 && q[i] > 0.0 {
+            q[i] *= 0.9995;
+        }
         let r = rec[i] as usize;
         if r >= n || r == i || !land[r] { continue; }
         if lake_of[r] != NO_LAKE {
