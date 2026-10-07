@@ -567,6 +567,24 @@ impl Builder<'_> {
                 let path = pts.iter().zip(&q).map(|(&p, &q)| {
                     [p[0] * inp.cell_ft, p[1] * inp.cell_ft, crate::lod::rivers::width_ft(q as f64)]
                 }).collect();
+                let source_feature = r.source_lake.and_then(|lake_id| self.out.features.iter().find(|g| g.kind == "lake" && g.hydro_lake_id == Some(lake_id)).map(|lake| (lake.id.clone(), lake.name.clone())));
+                let mouth_lake_feature = r.mouth_lake.and_then(|lake_id| self.out.features.iter().find(|g| g.kind == "lake" && g.hydro_lake_id == Some(lake_id)).map(|lake| (lake.id.clone(), lake.name.clone())));
+                let ocean_feature = if r.mouth == Mouth::Ocean {
+                    let cell = r.terminal_receiver.unwrap_or(r.cells[r.cells.len() - 1]);
+                    self.out.features.iter()
+                        .filter(|g| g.kind == "ocean" || g.kind == "sea")
+                        .min_by(|a, b| {
+                            let cx = (cell as usize % w) as f64 * inp.cell_ft;
+                            let cy = (cell as usize / w) as f64 * inp.cell_ft;
+                            let da = (a.x - cx) * (a.x - cx) + (a.y - cy) * (a.y - cy);
+                            let db = (b.x - cx) * (b.x - cx) + (b.y - cy) * (b.y - cy);
+                            da.total_cmp(&db)
+                        })
+                        .map(|water| (water.id.clone(), water.name.clone()))
+                } else {
+                    None
+                };
+
                 if let Some(f) = self.out.features.iter_mut().find(|f| f.id == id) {
                     f.river_path = Some(path);
                     f.stream_order = Some(r.order);
@@ -582,30 +600,13 @@ impl Builder<'_> {
                     f.mouth_lake_id = r.mouth_lake;
                     f.river_parent_index = r.into;
                     f.river_chain_index = Some(ri);
-                    if let Some(lake_id) = r.source_lake {
-                        if let Some(lake) = self.out.features.iter().find(|g| g.kind == "lake" && g.hydro_lake_id == Some(lake_id)) {
-                            f.source_feature_id = Some(lake.id.clone());
-                            f.source_name = Some(lake.name.clone());
-                        }
+                    if let Some((feature_id, name)) = source_feature {
+                        f.source_feature_id = Some(feature_id);
+                        f.source_name = Some(name);
                     }
-                    if let Some(lake_id) = r.mouth_lake {
-                        if let Some(lake) = self.out.features.iter().find(|g| g.kind == "lake" && g.hydro_lake_id == Some(lake_id)) {
-                            f.mouth_feature_id = Some(lake.id.clone());
-                            f.mouth_name = Some(lake.name.clone());
-                        }
-                    }
-                    if r.mouth == Mouth::Ocean {
-                        let cell = r.terminal_receiver.unwrap_or(r.cells[r.cells.len() - 1]);
-                        if let Some(water) = self.out.features.iter().filter(|g| g.kind == "ocean" || g.kind == "sea").min_by(|a,b| {
-                            let cx = (cell as usize % w) as f64 * inp.cell_ft;
-                            let cy = (cell as usize / w) as f64 * inp.cell_ft;
-                            let da = (a.x-cx)*(a.x-cx)+(a.y-cy)*(a.y-cy);
-                            let db = (b.x-cx)*(b.x-cx)+(b.y-cy)*(b.y-cy);
-                            da.total_cmp(&db)
-                        }) {
-                            f.mouth_feature_id = Some(water.id.clone());
-                            f.mouth_name = Some(water.name.clone());
-                        }
+                    if let Some((feature_id, name)) = mouth_lake_feature.or(ocean_feature) {
+                        f.mouth_feature_id = Some(feature_id);
+                        f.mouth_name = Some(name);
                     }
                 }
             }
