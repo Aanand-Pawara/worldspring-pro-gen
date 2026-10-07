@@ -1590,7 +1590,6 @@ pub fn validate_hydrology(
     true
 }
 
-ver]) -> bool {
     let n = w * h;
     for river in rivers {
         if river.cells.is_empty() || river.cells.len() != river.q.len() || river.source_cell != river.cells[0] { return false; }
