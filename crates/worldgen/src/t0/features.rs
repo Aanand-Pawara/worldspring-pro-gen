@@ -578,7 +578,7 @@ impl Builder<'_> {
                     let mouth_cell = *r.cells.last().unwrap() as usize;
                     if let Some(receiver) = r.terminal_receiver.map(|c| c as usize) {
                         if receiver < inp.w * inp.h && !inp.land[receiver] {
-                            let desired = if delta_strength >= 8.0 { 4 } else if delta_strength >= 3.0 { 3 } else { 2 };
+                            let desired = if delta_strength >= 6.0 { 3 } else { 2 };
                             if let Some(delta_paths) = build_delta_paths(inp, r, mouth_cell, receiver, desired) {
                                 if delta_paths.len() >= 2 {
                                     let spread_ft = delta_paths.iter()
@@ -899,29 +899,14 @@ fn build_delta_paths(
             let oa = libm::atan2((other / w) as f64 - my, (other % w) as f64 - mx);
             let mut d = (ta - oa).abs();
             while d > std::f64::consts::PI { d = std::f64::consts::TAU - d; }
-            d >= 0.30
+            d >= 0.52
         });
         if separated { chosen.push(target); }
     }
     if chosen.len() < 2 { return None; }
 
-    // Real deltas share a lower-delta trunk before bifurcating.
-    let mut branch_start = mouth;
-    for _ in 0..3 {
-        let mut best: Option<(f64, usize)> = None;
-        for (nb, _) in neighbors(w, h, branch_start) {
-            if !inp.land[nb] || inp.hydro.lake_of[nb] != super::hydro::NO_LAKE { continue; }
-            let dx = (nb % w) as f64 - mx;
-            let dy = (nb / w) as f64 - my;
-            let forward = dx * fx + dy * fy;
-            if forward <= 0.0 { continue; }
-            let rise = (inp.height[nb] - inp.height[branch_start]).max(0.0) / cell_ft;
-            let score = rise * 8.0 - forward * 3.0;
-            if best.is_none_or(|b| score < b.0) { best = Some((score, nb)); }
-        }
-        let Some((_, next)) = best else { break; };
-        branch_start = next;
-    }
+    // Attach bifurcation to the actual terminal river reach, never to an unrelated land cell.
+    let branch_start = river.cells.get(river.cells.len().saturating_sub(2)).copied().map(|c| c as usize).unwrap_or(mouth);
 
     let mut used = vec![false; w * h];
     let mut paths = Vec::with_capacity(chosen.len());
