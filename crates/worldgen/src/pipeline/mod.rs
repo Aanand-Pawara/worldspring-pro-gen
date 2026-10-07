@@ -125,6 +125,12 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
     let mut out = String::new();
     writeln!(out, "t0 {:016x}", fnv64(&ex.t0.to_bytes())).unwrap();
     writeln!(out, "overlay {:016x}", fnv64(ex.t0.overlay_json().as_bytes())).unwrap();
+    if let Some(extra) = &ex.t0.extra {
+        writeln!(out, "overlay/features {:016x}", fnv64(serde_json::to_string(&extra.overlay.features).unwrap_or_default().as_bytes())).unwrap();
+        writeln!(out, "overlay/kingdoms {:016x}", fnv64(serde_json::to_string(&extra.overlay.kingdoms).unwrap_or_default().as_bytes())).unwrap();
+        writeln!(out, "overlay/borders {:016x}", fnv64(serde_json::to_string(&extra.overlay.kingdom_borders).unwrap_or_default().as_bytes())).unwrap();
+        writeln!(out, "overlay/cells {:016x}", fnv64(serde_json::to_string(&extra.overlay.kingdom_cells).unwrap_or_default().as_bytes())).unwrap();
+    }
     for k in &keys {
         let bytes = ex.terrain_packed(*k);
         writeln!(out, "terrain/{}/{}/{} {:016x}", k.level, k.x, k.y, fnv64(&bytes)).unwrap();

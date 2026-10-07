@@ -54,10 +54,11 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
+      - name: Test native and WASM generation
+        run: npm run det
+
       - name: Build site
-        run: |
-          npm run wasm
-          npm --prefix app run build -- --outDir ../target/site --emptyOutDir
+        run: npm --prefix app run build -- --outDir ../target/site --emptyOutDir
         env:
           WS_BASE: /worldspring-pro-gen/
           VITE_SITE_ROOT: /worldspring-pro-gen/

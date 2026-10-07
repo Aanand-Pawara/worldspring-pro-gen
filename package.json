@@ -6,7 +6,7 @@
     "wasm": "node scripts/build-wasm.mjs",
     "dev": "npm --prefix app run dev",
     "build": "npm run wasm && npm --prefix app run build",
-    "det": "node scripts/det-wasm.mjs",
+    "det": "npm run wasm && node scripts/det-wasm.mjs",
     "bench": "node scripts/bench.mjs",
     "check": "npm --prefix app run check",
     "mapd": "cargo run --release -p mapd --",

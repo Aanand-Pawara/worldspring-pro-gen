@@ -19,6 +19,7 @@ pub struct Ctx {
 impl Ctx {
     #[wasm_bindgen(constructor)]
     pub fn new(world_json: &str) -> Result<Ctx, JsError> {
+        console_error_panic_hook::set_once();
         let world = World::from_json(world_json).map_err(|e| JsError::new(&e))?;
         Ok(Ctx { world, t0: None })
     }

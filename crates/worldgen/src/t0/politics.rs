@@ -16,44 +16,49 @@ pub struct BorderSegment { pub kingdom: u16, pub other: u16, pub a: [f64; 2], pu
 pub struct Politics { pub kingdoms: Vec<Kingdom>, pub kingdom_of: Vec<u16>, pub borders: Vec<BorderSegment> }
 
 #[derive(Clone, Copy, Debug)]
-struct Frontier { cost: f64, kingdom: u16, cell: usize }
+struct Frontier { cost: u64, kingdom: u16, cell: usize }
 impl PartialEq for Frontier { fn eq(&self, other: &Self) -> bool { self.cost == other.cost && self.kingdom == other.kingdom && self.cell == other.cell } }
 impl Eq for Frontier {}
 impl Ord for Frontier {
     fn cmp(&self, other: &Self) -> Ordering {
-        other.cost.total_cmp(&self.cost).then_with(|| other.kingdom.cmp(&self.kingdom)).then_with(|| other.cell.cmp(&self.cell))
+        other.cost.cmp(&self.cost).then_with(|| other.kingdom.cmp(&self.kingdom)).then_with(|| other.cell.cmp(&self.cell))
     }
 }
 impl PartialOrd for Frontier { fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) } }
 
-fn edge_cost(a: usize, b: usize, w: usize, h: usize, cell_ft: f64, height: &[f64], hydro: &Hydro) -> f64 {
+fn edge_cost(a: usize, b: usize, w: usize, h: usize, cell_ft: f64, height: &[f64], hydro: &Hydro) -> u64 {
+    // Quantize floating inputs before they enter the priority queue. This keeps political
+    // territory decisions bit-identical between native and WASM floating-point backends.
+    const SCALE: u64 = 1_000_000;
     // Frontiers are simulated as movement costs, not straight geometric partitions. Flat,
     // fertile-looking corridors are cheap; steep terrain and major waterways are expensive.
-    let slope = ((height[a] - height[b]).abs() / cell_ft.max(1.0)).min(4.0);
-    let mut cost = 1.0 + 11.0 * (slope * 5.0).min(3.0).powi(2);
+    let slope_m = (((height[a] - height[b]).abs() / cell_ft.max(1.0)).min(4.0) * SCALE as f64).round() as u64;
+    let slope_term = (slope_m * 5).min(3 * SCALE);
+    let mut cost = SCALE + 11 * slope_term * slope_term / SCALE;
 
     // Rivers are especially attractive as borders because crossing them is costly while moving
     // along the same river corridor is comparatively cheap.
     let river_a = hydro.discharge.get(a).copied().unwrap_or(0.0) as f64 > hydro::RIVER_Q * 0.20;
     let river_b = hydro.discharge.get(b).copied().unwrap_or(0.0) as f64 > hydro::RIVER_Q * 0.20;
     if river_a || river_b {
-        cost += 52.0;
-        if river_a && river_b { cost += 14.0; }
+        cost += 52 * SCALE;
+        if river_a && river_b { cost += 14 * SCALE; }
     }
 
     // Lakes are stronger barriers than rivers. Their shorelines naturally become political
     // frontiers without requiring a special "draw a lake border" rule.
     let lake_a = hydro.lake_of.get(a).copied().unwrap_or(hydro::NO_LAKE) != hydro::NO_LAKE;
     let lake_b = hydro.lake_of.get(b).copied().unwrap_or(hydro::NO_LAKE) != hydro::NO_LAKE;
-    if lake_a || lake_b { cost += 110.0; }
+    if lake_a || lake_b { cost += 110 * SCALE; }
 
     // Major waterways tend to become durable political frontiers. Treat strong drainage cells
     // as expensive to cross so borders naturally settle along rivers instead of cutting across
     // them. The underlying terrain still dominates, so this is a tendency, not a hard wall.
     let qa = hydro.discharge.get(a).copied().unwrap_or(0.0) as f64;
     let qb = hydro.discharge.get(b).copied().unwrap_or(0.0) as f64;
-    let river_barrier = ((qa.max(qb)) / hydro::RIVER_Q).sqrt().clamp(0.0, 1.0);
-    cost += 95.0 * river_barrier;
+    let river_ratio = ((qa.max(qb)) / hydro::RIVER_Q).clamp(0.0, 1.0);
+    let river_barrier = (crate::core::sqrt(river_ratio) * SCALE as f64).round() as u64;
+    cost += 95 * river_barrier;
 
     // A cell that stands well above its neighbours behaves like a ridge. This makes mountain
     // chains and escarpments hard to cross while still allowing low saddles/passes to remain
@@ -65,7 +70,8 @@ fn edge_cost(a: usize, b: usize, w: usize, h: usize, cell_ft: f64, height: &[f64
         }
     }
     let ridge = ridge.min(2.5);
-    cost += 20.0 * ridge.powi(2);
+    let ridge_m = (ridge * SCALE as f64).round() as u64;
+    cost += 20 * ridge_m * ridge_m / SCALE;
     cost
 }
 
@@ -103,23 +109,23 @@ pub fn assign(world: &World, w: usize, h: usize, cell_ft: f64, land: &[bool], he
     // Terrain, drainage barriers, and mountain passes shape the frontier, while capitals provide
     // the human centre of gravity. This is intentionally a deterministic approximation of
     // historical territorial expansion, not a mathematically straight partition.
-    let inf = f64::INFINITY;
+    let inf = u64::MAX;
     let mut dist = vec![inf; n];
     let mut kingdom_of = vec![u16::MAX; n];
     let mut heap = BinaryHeap::new();
     for (ki, &si) in capitals.iter().enumerate() {
         let cell = settlements[si].cell;
-        dist[cell] = 0.0;
+        dist[cell] = 0;
         kingdom_of[cell] = ki as u16;
-        heap.push(Frontier { cost: 0.0, kingdom: ki as u16, cell });
+        heap.push(Frontier { cost: 0, kingdom: ki as u16, cell });
     }
     while let Some(cur) = heap.pop() {
-        if cur.cost > dist[cur.cell] + 1e-9 || kingdom_of[cur.cell] != cur.kingdom { continue; }
+        if cur.cost > dist[cur.cell] || kingdom_of[cur.cell] != cur.kingdom { continue; }
         let cc = comp[cur.cell];
         for (nb, _) in neighbors(w, h, cur.cell) {
             if !land[nb] || comp[nb] != cc { continue; }
             let nd = cur.cost + edge_cost(cur.cell, nb, w, h, cell_ft, height, hydro);
-            let better = nd < dist[nb] - 1e-9 || (nd - dist[nb]).abs() <= 1e-9 && cur.kingdom < kingdom_of[nb];
+            let better = nd < dist[nb] || nd == dist[nb] && cur.kingdom < kingdom_of[nb];
             if better {
                 dist[nb] = nd;
                 kingdom_of[nb] = cur.kingdom;

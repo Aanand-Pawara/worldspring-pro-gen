@@ -269,8 +269,16 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             continue;
         }
         let mut rng = Pcg32::new(world.stream("t0.settle"), 21 + tier as u64);
-        let mut cands: Vec<(f64, usize)> = (0..n).filter(|&k| score[k] > 0.05).map(|k| (score[k] * road_bonus(k, tier) * (0.55 + 0.45 * rng.next_f64()), k)).collect();
-        cands.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+        let mut cands: Vec<(i64, usize)> = (0..n)
+            .filter(|&k| score[k] > 0.05)
+            .map(|k| {
+                let value = score[k] * road_bonus(k, tier) * (0.55 + 0.45 * rng.next_f64());
+                // Candidate ranking is a selection boundary, so keep it identical across native
+                // and WASM even when their floating-point intermediates differ by a few ulps.
+                (((value * 1_000_000_000.0).round()) as i64, k)
+            })
+            .collect();
+        cands.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         let spacing = spacing_mi * 5280.0 / cell;
         // A settlement of this tier at cell `k`, standing at (x, y) ft.
         let make = |k: usize, rng: &mut Pcg32, x: f64, y: f64, pin: Option<u32>| {

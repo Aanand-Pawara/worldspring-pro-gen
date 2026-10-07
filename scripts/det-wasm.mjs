@@ -43,7 +43,9 @@ const built = JSON.parse(wasm.default_world_json(424242));
 }
 
 let total = 0;
-for (const worldJson of [wasm.default_world_json(424242), JSON.stringify(sketched), JSON.stringify(built)]) {
+const stressWorlds = [1, 0, 2, 3, 7, 11, 42, 99, 1234, 2026, 424242, 8675309].map((seed) => wasm.default_world_json(seed));
+for (const [caseIndex, worldJson] of [...stressWorlds, JSON.stringify(sketched), JSON.stringify(built)].entries()) {
+  console.log(`WASM/native generation case ${caseIndex + 1}`);
   const native = execFileSync('cargo', ['run', '-q', '--release', '-p', 'worldgen', '--example', 'dethash', '-'], {
     cwd: root,
     input: worldJson,
@@ -56,7 +58,7 @@ for (const worldJson of [wasm.default_world_json(424242), JSON.stringify(sketche
   const diffs = a.filter((line, i) => line !== b[i]);
   if (a.length !== b.length || diffs.length) {
     console.error(`DETERMINISM FAILURE: ${diffs.length} of ${a.length} artifacts differ`);
-    diffs.slice(0, 10).forEach((d) => console.error('  native:', d));
+    diffs.slice(0, 10).forEach((d) => { const i = a.indexOf(d); console.error('  native:', d); console.error('  wasm:  ', b[i] ?? '<missing>'); });
     process.exit(1);
   }
   total += a.length;

@@ -937,7 +937,7 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
     let curves: Vec<RiverCurve> = chains
         .iter()
         .enumerate()
-        .map(|(ri, r)| {
+        .filter_map(|(ri, r)| {
             let mut pts: Vec<[f64; 2]> = r.cells.iter().map(|&c| [(c as usize % w) as f64 * cell, (c as usize / w) as f64 * cell]).collect();
             let mut z: Vec<f32> = r
                 .cells
@@ -989,7 +989,14 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
             }
             let mut taper = tapers[ri].clone();
             while taper.len() < pts.len() { taper.push(0.0); }
-            RiverCurve::new(pts, z, q, taper, river_seed(world.seed, ri))
+            if pts.len() < 2 { return None; }
+            let n = pts.len();
+            let last_z = z.last().copied().unwrap_or(sea as f32);
+            let last_q = q.last().copied().unwrap_or(0.0);
+            z.resize(n, last_z);
+            q.resize(n, last_q);
+            taper.resize(n, 0.0);
+            Some(RiverCurve::new(pts, z, q, taper, river_seed(world.seed, ri)))
         })
         .collect();
 

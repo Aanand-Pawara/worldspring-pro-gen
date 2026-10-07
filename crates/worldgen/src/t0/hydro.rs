@@ -302,7 +302,6 @@ fn lake_receiver_chain_valid(start: usize, land: &[bool], lake_of: &[u32], rec: 
 fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], filled: &[f64], rec: &mut [u32], lakes: &mut [Lake]) {
     if lakes.len() < 2 { return; }
     const MAX_CONNECT_CELLS: f64 = 48.0;
-    const LEVEL_TOLERANCE_FT: f64 = 2.0;
 
     // Natural outlets are the fallback. A nearby lower lake may become the preferred outlet,
     // producing a real connecting river while keeping the two lake bodies separate.
@@ -476,7 +475,10 @@ fn lake_spill_path(
             if filled[nb] > filled[cur] + 0.5 { continue; }
             let k = local(nb);
             if parent[k] != u32::MAX { continue; }
-            parent[k] = cur as u32;
+            // `parent` is indexed in the local bounding box, so keep parent links in
+            // that same coordinate space. Storing a global cell here corrupts the walk
+            // as soon as the spill search starts away from row/column zero.
+            parent[k] = local(cur) as u32;
             queue.push_back(nb);
         }
     }
@@ -877,6 +879,26 @@ mod tests {
         let order = vec![2, 0, 1];
         let acc = accumulate_flow(3, 1, &land, &lake, &rec, &order);
         assert_eq!(acc, vec![1, 3, 1]);
+    }
+
+    #[test]
+    fn lake_spill_path_uses_local_parent_indices() {
+        let w = 10;
+        let h = 10;
+        let n = w * h;
+        let land = vec![true; n];
+        let mut lake = vec![NO_LAKE; n];
+        lake[55] = 0;
+        lake[57] = 1;
+        let filled: Vec<f64> = (0..n).map(|i| -(i as f64)).collect();
+        let path = lake_spill_path(
+            w, h, &land, &lake, &filled, filled[55],
+            &[55], &[57], 1,
+        ).expect("nearby lower lake should have a spill path");
+        assert_eq!(path.0, 55);
+        assert_eq!(path.2, 57);
+        assert!(!path.1.is_empty());
+        assert!(path.1.iter().all(|&c| lake[c as usize] == NO_LAKE));
     }
 
     #[test]

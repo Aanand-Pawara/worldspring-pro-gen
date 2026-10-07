@@ -587,7 +587,7 @@ impl Builder<'_> {
                     let my = (receiver / w) as f64;
                     let mut dx = mx - (mouth_cell % w) as f64;
                     let mut dy = my - (mouth_cell / w) as f64;
-                    let norm = (dx * dx + dy * dy).sqrt().max(1e-9);
+                    let norm = crate::core::sqrt(dx * dx + dy * dy).max(1e-9);
                     dx /= norm; dy /= norm;
                     let forward = libm::atan2(dy, dx);
                     let land = |x: f64, y: f64| {
@@ -640,18 +640,27 @@ impl Builder<'_> {
                             let ty = gy as f64 * inp.cell_ft;
                             let dx = tx - (mouth_cell % w) as f64;
                             let dy = ty - (mouth_cell / w) as f64;
-                            let d = (dx * dx + dy * dy).sqrt() / inp.cell_ft;
+                            let d = crate::core::sqrt(dx * dx + dy * dy) / inp.cell_ft;
                             if d < 2.0 || d > branch_len_cells * 2.25 { continue; }
                             let ang = libm::atan2(dy, dx);
                             let mut da = ang - forward;
                             while da > std::f64::consts::PI { da -= std::f64::consts::TAU; }
                             while da < -std::f64::consts::PI { da += std::f64::consts::TAU; }
-                            if da.cos() < -0.2 { continue; }
-                            let score = d * (0.65 + 0.35 * da.cos()) + da.sin().abs() * branch_len_cells * 0.35;
+                            if libm::cos(da) < -0.2 { continue; }
+                            let score = d * (0.65 + 0.35 * libm::cos(da)) + libm::sin(da).abs() * branch_len_cells * 0.35;
                             outlets.push((score, tx, ty));
                         }
                     }
-                    outlets.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    // Candidate scores are floating-point geometry. Quantize the ranking and
+                    // break ties by the integer shoreline coordinates so native and WASM cannot
+                    // choose different distributaries from numerically equal candidates.
+                    outlets.sort_by(|a, b| {
+                        let sa = (a.0 * 1_000_000.0).round();
+                        let sb = (b.0 * 1_000_000.0).round();
+                        sa.total_cmp(&sb)
+                            .then(a.2.total_cmp(&b.2))
+                            .then(a.1.total_cmp(&b.1))
+                    });
 
                     let mut chosen: Vec<[f64; 2]> = Vec::new();
                     // Keep a wider candidate pool than the final branch count. Some shoreline
@@ -669,7 +678,7 @@ impl Builder<'_> {
                             if chosen.iter().all(|p| {
                                 let dx = tx - p[0];
                                 let dy = ty - p[1];
-                                (dx * dx + dy * dy).sqrt() >= inp.cell_ft * min_spacing
+                                crate::core::sqrt(dx * dx + dy * dy) >= inp.cell_ft * min_spacing
                             }) {
                                 chosen.push([*tx, *ty]);
                             }
@@ -683,12 +692,12 @@ impl Builder<'_> {
                     let route_to_water = |start: [f64; 2], target: [f64; 2], seed: u64, max_uphill_grade: f64| -> Vec<[f64; 2]> {
                         let dx = target[0] - start[0];
                         let dy = target[1] - start[1];
-                        let dist = (dx * dx + dy * dy).sqrt().max(inp.cell_ft);
+                        let dist = crate::core::sqrt(dx * dx + dy * dy).max(inp.cell_ft);
                         let dir = libm::atan2(dy, dx);
                         let mut da = dir - forward;
                         while da > std::f64::consts::PI { da -= std::f64::consts::TAU; }
                         while da < -std::f64::consts::PI { da += std::f64::consts::TAU; }
-                        let side = if da.sin() >= 0.0 { 1.0 } else { -1.0 };
+                        let side = if libm::sin(da) >= 0.0 { 1.0 } else { -1.0 };
                         let curve = (0.07 + 0.10 * crate::core::rng::unit(crate::core::rng::mix64(seed ^ 0x3c79_ac49_ba97_f4a7))) * side * dist;
                         let c1 = [
                             start[0] + libm::cos(forward) * dist * 0.34 - libm::sin(forward) * curve,
@@ -727,6 +736,11 @@ impl Builder<'_> {
                         pts
                     };
 
+                    let snap_delta_path = |path: Vec<[f64; 2]>| -> Vec<[f64; 2]> {
+                        path.into_iter()
+                            .map(|p| [(p[0] * 16.0).round() / 16.0, (p[1] * 16.0).round() / 16.0])
+                            .collect()
+                    };
                     let mut delta_paths: Vec<Vec<[f64; 2]>> = Vec::new();
                     // Search targets for each progressively upstream origin. This prevents a
                     // couple of bad shoreline candidates from collapsing every delta to two arms.
@@ -769,7 +783,7 @@ impl Builder<'_> {
                                     })
                                 })
                             });
-                            if separated { delta_paths.push(path); }
+                            if separated { delta_paths.push(snap_delta_path(path)); }
                         }
                     }
 
@@ -786,7 +800,7 @@ impl Builder<'_> {
                                 (path.len() >= 3).then_some(path)
                             })
                             .unwrap_or_default();
-                        if path.len() >= 3 { delta_paths.push(path); }
+                        if path.len() >= 3 { delta_paths.push(snap_delta_path(path)); }
                     }
 
                     delta_paths.retain(|p| p.len() >= 3);
