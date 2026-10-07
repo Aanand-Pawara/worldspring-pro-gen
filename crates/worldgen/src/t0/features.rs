@@ -876,9 +876,9 @@ fn build_delta_paths(
         }
     }
     for &c in &river.cells {
-        let c = c as usize;
-        blocked[c] = true;
-        for (nb, _) in neighbors(w, h, c) { blocked[nb] = true; }
+        // Block the parent channel itself, but leave its immediate surroundings open so the
+        // daughter channels can actually peel away at the mouth apex.
+        blocked[c as usize] = true;
     }
     blocked[mouth] = false;
 
