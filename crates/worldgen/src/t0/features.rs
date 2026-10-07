@@ -902,7 +902,7 @@ fn build_delta_paths(
 
     let mut used = vec![false; w * h];
     let mut paths = Vec::with_capacity(chosen.len());
-    for (branch, &target) in chosen.iter().enumerate() {
+    for &target in chosen.iter() {
         let mut goals = Vec::<usize>::new();
         for (nb, _) in neighbors(w, h, target) {
             if inp.land[nb] && inp.hydro.lake_of[nb] == super::hydro::NO_LAKE {
