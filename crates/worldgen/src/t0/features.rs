@@ -950,7 +950,7 @@ fn build_delta_paths(
     // Select one terminal mouth for each intended finger. The separation constraint prevents
     // adjacent shoreline pixels from becoming fake duplicate distributaries.
     let mut chosen = Vec::<usize>::with_capacity(branch_count);
-    for &wanted_angle in &target_angles {
+    for &wanted_angle in target_angles {
         let mut best: Option<(f64, usize)> = None;
         for &(score, angle, target) in &targets {
             if (angle - wanted_angle).abs() > 0.32 {
