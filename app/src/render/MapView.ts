@@ -547,6 +547,39 @@ export class MapView {
     };
     draw(8, 0xffd166, 0.9);
     draw(3, 0xffffff, 0.95);
+
+    // Direction markers follow the authoritative river_path order (source -> mouth).
+    // Keep them sparse so the selection remains readable instead of becoming a barcode.
+    const arrowSpacing = 120;
+    const arrowLength = 10;
+    const arrowWidth = 6;
+    let distanceSinceArrow = arrowSpacing * 0.45;
+    for (let i = 1; i < pts.length; i++) {
+      const [ax, ay] = pts[i - 1];
+      const [bx, by] = pts[i];
+      const dx = bx - ax;
+      const dy = by - ay;
+      const segment = Math.hypot(dx, dy);
+      if (segment < 1e-3) continue;
+      distanceSinceArrow += segment;
+      if (distanceSinceArrow < arrowSpacing) continue;
+      distanceSinceArrow = 0;
+
+      const ux = dx / segment;
+      const uy = dy / segment;
+      const px = bx - ux * arrowLength;
+      const py = by - uy * arrowLength;
+      const lx = px - uy * arrowWidth;
+      const ly = py + ux * arrowWidth;
+      const rx = px + uy * arrowWidth;
+      const ry = py - ux * arrowWidth;
+
+      g.moveTo(bx, by);
+      g.lineTo(lx, ly);
+      g.lineTo(rx, ry);
+      g.closePath();
+      g.fill({ color: 0xffffff, alpha: 0.95 });
+    }
   }
 
   /** Input is off: a script drives the camera, or the DM holds it. */
