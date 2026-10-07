@@ -631,7 +631,9 @@ fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], fille
     // outlet. That lower lake may be the next link in the chain and will receive its own outlet
     // when its turn arrives. This is the topology Great-Lakes-style systems need.
     const MAX_CONNECT_CELLS: usize = 48;
-    const MIN_LEVEL_DROP_FT: f64 = 0.25;
+    // Lakes at the same water level can be one hydrologic system separated by a narrow
+    // strait/channel. This is how the Michigan-Huron part of the real Great Lakes behaves.
+    const LAKE_LEVEL_EPSILON_FT: f64 = 0.05;
 
     for lake_id in 0..lakes.len() {
         lakes[lake_id].outlet = lakes[lake_id].cells.iter().copied().find(|&c| {
@@ -674,7 +676,7 @@ fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], fille
 
         let mut candidates: Vec<(bool, bool, f64, usize, usize)> = Vec::new();
         for target in 0..lakes.len() {
-            if target == source || lakes[target].level_ft >= lakes[source].level_ft - MIN_LEVEL_DROP_FT {
+            if target == source || lakes[target].level_ft > lakes[source].level_ft + LAKE_LEVEL_EPSILON_FT {
                 continue;
             }
 
@@ -965,6 +967,12 @@ fn recompute_final_discharge(
 
     let mut outlets = vec![None; lakes.len()];
     for (lake_id, lake) in lakes.iter().enumerate() {
+        outlets[lake_id] = lake.outlet.map(|c| c as usize);
+        if outlets[lake_id].is_some() {
+            continue;
+        }
+        // Keep a defensive fallback for old/generated graphs whose Lake metadata predates the
+        // final receiver repair. Prefer the authoritative outlet whenever it exists.
         for &cell in &lake.cells {
             let i = cell as usize;
             let r = rec[i] as usize;
@@ -1391,6 +1399,48 @@ mod tests {
             assert!(cur < n);
         }
         panic!("lake connector did not reach the lower lake");
+    }
+
+    #[test]
+    fn equal_level_close_lakes_connect_through_a_real_receiver_path() {
+        let w = 12;
+        let h = 3;
+        let n = w * h;
+        let mut lake_of = vec![NO_LAKE; n];
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        for y in 1..2 {
+            for x in 2..4 {
+                let c = y * w + x;
+                lake_of[c] = 0;
+                a.push(c as u32);
+            }
+            for x in 5..7 {
+                let c = y * w + x;
+                lake_of[c] = 1;
+                b.push(c as u32);
+            }
+        }
+        let land = lake_of.iter().map(|&id| id == NO_LAKE).collect::<Vec<_>>();
+        let filled = (0..n).map(|i| {
+            let x = i % w;
+            if x == 4 { 100.0 } else { 90.0 }
+        }).collect::<Vec<_>>();
+        let mut rec: Vec<u32> = (0..n).map(|i| i as u32).collect();
+        let mut lakes = vec![
+            Lake { level_ft: 100.0, cells: a, kind: LakeKind::Fresh, max_depth_ft: 100.0, outlet: None, inlet_count: 0 },
+            Lake { level_ft: 100.0, cells: b, kind: LakeKind::Fresh, max_depth_ft: 100.0, outlet: None, inlet_count: 0 },
+        ];
+        connect_close_lakes(w, h, &land, &lake_of, &filled, &mut rec, &mut lakes);
+        assert!(lakes[0].outlet.is_some());
+        let outlet = lakes[0].outlet.unwrap() as usize;
+        let mut cur = rec[outlet] as usize;
+        for _ in 0..n {
+            if lake_of[cur] == 1 { return; }
+            assert!(cur < n);
+            cur = rec[cur] as usize;
+        }
+        panic!("equal-level lakes did not connect");
     }
 
     #[test]
