@@ -515,7 +515,7 @@ impl Builder<'_> {
         let chains = inp.hydro.rivers.clone();
                 let mut falls: Vec<(f64, f64, f64, usize)> = Vec::new();
         let mut rapids: Vec<(f64, f64, f64, usize)> = Vec::new();
-        for r in &chains {
+        for (ri, r) in chains.iter().enumerate() {
             if r.cells.len() < 3 {
                 continue;
             }
@@ -578,7 +578,7 @@ impl Builder<'_> {
                     f.river_source_y = Some((r.source_cell as usize / w) as f64 * inp.cell_ft);
                     f.mouth_lake_id = r.mouth_lake;
                     f.river_parent_index = r.into;
-                    f.river_chain_index = Some(chains.iter().position(|candidate| candidate.source_cell == r.source_cell && candidate.cells == r.cells).unwrap_or(usize::MAX));
+                    f.river_chain_index = Some(ri);
                     if let Some(lake_id) = r.source_lake {
                         if let Some(lake) = self.out.features.iter().find(|g| g.kind == "lake" && g.hydro_lake_id == Some(lake_id)) {
                             f.source_feature_id = Some(lake.id.clone());
@@ -704,11 +704,11 @@ impl Builder<'_> {
             let elev = self.above_sea(c);
             self.push("waterfall", NameKind::Waterfall, cx, cy, 0.0, 30.0 * inp.cell_ft, Some(elev.round()), Some(format!("drop ~{} ft", fmt_thousands(drop))));
         }
-        let river_sources: Vec<(String, f64, f64, f64)> = self.out.features.iter()
+        let river_sources: Vec<(String, f64, f64)> = self.out.features.iter()
             .filter(|f| f.kind == "river" && f.source_feature_id.is_none())
-            .map(|f| (f.id.clone(), f.river_source_x.unwrap_or(f.x), f.river_source_y.unwrap_or(f.y), f.extent_ft))
+            .map(|f| (f.id.clone(), f.river_source_x.unwrap_or(f.x), f.river_source_y.unwrap_or(f.y)))
             .collect();
-        for (river_id, x, y, _) in river_sources {
+        for (river_id, x, y) in river_sources {
             let pond_id = format!("{river_id}:source-pond");
             self.out.features.push(Feature {
                 id: pond_id.clone(), kind: "pond", name: String::new(), x, y, angle: 0.0,
