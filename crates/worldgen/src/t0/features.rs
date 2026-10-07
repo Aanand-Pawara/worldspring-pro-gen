@@ -928,7 +928,7 @@ fn build_delta_paths(
 
             let land_goal = neighbors(w, h, k)
                 .filter(|(nb, _)| inp.land[*nb] && inp.hydro.lake_of[*nb] == super::hydro::NO_LAKE)
-                .map(|(nb, _)| *nb)
+                .map(|(nb, _)| nb)
                 .find(|&nb| !blocked[nb]);
             let Some(goal) = land_goal else { continue; };
 
