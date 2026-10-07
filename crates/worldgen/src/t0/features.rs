@@ -880,11 +880,8 @@ fn build_delta_paths(
     }
     blocked[mouth] = false;
 
-    // Choose exactly two daughter mouths around the apex. This gives the common, readable
-    // two-way delta split instead of making branch count scale directly with discharge.
-    // The parent channel + two daughters already gives three visible terminal outlets.
-    let forward_angle = libm::atan2(fy, fx);
-    let half_angle = 35.0_f64.to_radians();
+    // Choose exactly two daughter mouths around the apex. Real coastlines are irregular,
+    // so rank valid shoreline cells instead of requiring a narrow angular window up front.
     let mut targets = Vec::<(f64, f64, usize)>::new();
 
     for y in my as isize - radius as isize..=my as isize + radius as isize {
@@ -903,26 +900,19 @@ fn build_delta_paths(
             let vx = x as f64 - mx;
             let vy = y as f64 - my;
             let d = crate::core::sqrt(vx * vx + vy * vy);
-            if d < 5.0 || d > radius as f64 {
+            if d < 4.0 || d > radius as f64 {
                 continue;
             }
 
-            let angle = libm::atan2(vy, vx);
-            let mut da = angle - forward_angle;
-            while da > std::f64::consts::PI { da -= std::f64::consts::TAU; }
-            while da < -std::f64::consts::PI { da += std::f64::consts::TAU; }
-
-            // Targets belong on the two sides of the main flow axis, not directly ahead of it.
-            // This leaves an island/mouth-bar between daughter channels.
-            if da.abs() < 0.22 || da.abs() > 1.15 {
-                continue;
-            }
-            if (da > 0.0) != (da.abs() >= 0.22) {
+            let along = vx * fx + vy * fy;
+            if along < d * 0.15 {
                 continue;
             }
 
-            let along = (vx * fx + vy * fy) / d;
-            if along < 0.45 {
+            let cross = fx * vy - fy * vx;
+            let side = if cross < 0.0 { -1.0 } else { 1.0 };
+            let side_strength = cross.abs() / d;
+            if side_strength < 0.12 {
                 continue;
             }
 
@@ -938,14 +928,12 @@ fn build_delta_paths(
                 continue;
             }
 
-            let side = if da < 0.0 { -1.0 } else { 1.0 };
-            let angular_error = (da - side * half_angle).abs();
-            let target_score =
-                d
-                + angular_error * 6.0 * radius as f64
-                - along * 2.0 * radius as f64;
-
-            targets.push((target_score, da, k));
+            // Prefer a roughly 35° daughter direction, but never require it. The compact
+            // distance term and side term keep an island/mouth-bar between the branches.
+            let ideal_side = 0.82;
+            let side_error = (side_strength - ideal_side).abs();
+            let target_score = d + side_error * radius as f64 - along * 0.35;
+            targets.push((target_score, side, k));
         }
     }
 
