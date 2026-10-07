@@ -286,9 +286,109 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
     let flow_accumulation = accumulate_flow(w, h, land, &lake_of, &rec, &route_order);
     let basin_id = assign_basin_ids(w, h, land, &lake_of, &rec);
     let rivers = extract_rivers(w, h, cell_ft, land, &lake_of, &rec, &q, &flow_accumulation, &basin_id, river_threshold, &lakes);
+    add_headwater_ponds(w, h, land, &lake_of, height, &rivers, &mut water);
     debug_assert!(validate_river_network(w, h, land, &lake_of, &rec, &rivers));
     debug_assert!(lakes.iter().enumerate().all(|(lake_id, _)| lake_receiver_chain_valid(lake_id, land, &lake_of, &rec, &lakes)));
     Hydro { water, flow_accumulation, basin_id, discharge: q.iter().map(|&v| v as f32).collect(), receiver: rec, lake_of, lakes, rivers }
+}
+
+
+/// Give non-lake river sources a tiny, unnamed headwater pond in the actual water surface.
+/// These ponds stay below the lake classification thresholds and use an irregular connected
+/// footprint rather than a synthetic circle. Hydrology topology is unchanged: the source cell
+/// remains the river's first receiver cell and lake_of never includes these ponds.
+fn add_headwater_ponds(
+    w: usize,
+    h: usize,
+    land: &[bool],
+    lake_of: &[u32],
+    height: &[f64],
+    rivers: &[River],
+    water: &mut [f32],
+) {
+    const MAX_POND_CELLS: usize = 8;
+    const MIN_POND_CELLS: usize = 4;
+    const MAX_RISE_FT: f64 = 8.0;
+    const WATER_DEPTH_FT: f64 = 2.5;
+
+    fn hash(mut x: u64) -> u64 {
+        x ^= x >> 30;
+        x = x.wrapping_mul(0xbf58476d1ce4e5b9);
+        x ^= x >> 27;
+        x = x.wrapping_mul(0x94d049bb133111eb);
+        x ^ (x >> 31)
+    }
+
+    for (river_index, river) in rivers.iter().enumerate() {
+        if river.source_lake.is_some() || river.cells.is_empty() {
+            continue;
+        }
+        let source = river.source_cell as usize;
+        if source >= height.len() || !land[source] || lake_of[source] != NO_LAKE {
+            continue;
+        }
+
+        let base = height[source];
+        let target = MIN_POND_CELLS
+            + (hash((source as u64) ^ ((river_index as u64) << 32)) as usize
+                % (MAX_POND_CELLS - MIN_POND_CELLS + 1));
+
+        let mut pond = Vec::with_capacity(MAX_POND_CELLS);
+        let mut frontier = Vec::<usize>::with_capacity(16);
+        pond.push(source);
+
+        for (nb, _) in neighbors(w, h, source) {
+            if land[nb] && lake_of[nb] == NO_LAKE && height[nb] <= base + MAX_RISE_FT {
+                frontier.push(nb);
+            }
+        }
+
+        while pond.len() < target && !frontier.is_empty() {
+            let mut best = None;
+            let mut best_score = f64::INFINITY;
+            for (i, &cell) in frontier.iter().enumerate() {
+                if pond.iter().any(|&p| p == cell) {
+                    continue;
+                }
+                let rise = (height[cell] - base).max(0.0);
+                let jitter = (hash((cell as u64) ^ ((river_index as u64 + 1) * 0x9e3779b97f4a7c15))
+                    & 0xffff) as f64 / 65535.0;
+                let score = rise * 12.0 + jitter * 5.0;
+                if score < best_score {
+                    best_score = score;
+                    best = Some(i);
+                }
+            }
+            let Some(index) = best else { break; };
+            let cell = frontier.swap_remove(index);
+            if pond.iter().any(|&p| p == cell) {
+                continue;
+            }
+            pond.push(cell);
+
+            for (nb, _) in neighbors(w, h, cell) {
+                if !land[nb] || lake_of[nb] != NO_LAKE || height[nb] > base + MAX_RISE_FT {
+                    continue;
+                }
+                if !pond.iter().any(|&p| p == nb) && !frontier.iter().any(|&p| p == nb) {
+                    frontier.push(nb);
+                }
+            }
+        }
+
+        if pond.len() < MIN_POND_CELLS {
+            continue;
+        }
+
+        let level = pond.iter()
+            .map(|&cell| height[cell])
+            .fold(f64::NEG_INFINITY, f64::max)
+            + WATER_DEPTH_FT;
+
+        for cell in pond {
+            water[cell] = water[cell].max(level as f32);
+        }
+    }
 }
 
 fn connect_lakes_to_river_channels(
