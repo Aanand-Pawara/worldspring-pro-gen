@@ -402,6 +402,11 @@ export interface Geom {
 }
 
 /** Named feature from T0 (crates/worldgen/src/t0/features.rs). */
+export interface FeatureLink {
+  id: string;
+  name: string;
+}
+
 export interface Feature {
   id: string;
   kind: string;
@@ -426,11 +431,21 @@ export interface Feature {
   river_mouth?: 'ocean' | 'lake' | 'dry' | 'confluence';
   source_lake_id?: number;
   mouth_lake_id?: number;
+  /** Named source/receiving feature for a river. Headwaters use the unnamed source pond. */
+  source_name?: string;
+  source_feature_id?: string;
+  mouth_name?: string;
+  mouth_feature_id?: string;
+  /** Named rivers directly entering or leaving this lake. */
+  inlet_rivers?: FeatureLink[];
+  outlet_rivers?: FeatureLink[];
   /** Hydrology metadata for lake-type features. */
   area_mi2?: number;
   max_depth_ft?: number;
   inlet_count?: number;
   has_outlet?: boolean;
+  /** Stable hydrology lake index, not shown to users. */
+  hydro_lake_id?: number;
   kingdom_id?: number;
   kingdom_name?: string;
   political_rank?: 'capital' | 'city' | 'town' | 'village';
