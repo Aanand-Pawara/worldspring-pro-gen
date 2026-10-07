@@ -193,36 +193,51 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
         }
     }
 
-    // A lake is a storage node, not a dead raster patch. Its surface outflow must carry
-    // the lake's net water budget into the first downstream land cell (or receiving lake).
-    // The previous code only inspected q at the outlet cell, so a lake fed by many tributaries
-    // could have a visually valid outlet but almost no discharge on the connector.
-    // Process higher lake levels first because lake-to-lake links are strictly downhill.
-    let mut lake_order: Vec<usize> = (0..lakes.len()).collect();
-    lake_order.sort_by(|&a, &b| lakes[b].level_ft.total_cmp(&lakes[a].level_ft).then(a.cmp(&b)));
-    for lake_id in lake_order {
-        let Some(outlet) = lakes[lake_id].outlet else { continue; };
-        let net = lakes[lake_id].cells.iter().map(|&c| q[c as usize]).sum::<f64>().max(0.0);
-        if net <= 0.0 { continue; }
+    let river_threshold = RIVER_Q / river_density.max(0.05);
 
-        let mut cur = outlet as usize;
-        for _ in 0..n {
-            let next = rec[cur] as usize;
-            if next >= n || next == cur { break; }
-            if lake_of[next] == lake_id as u32 {
-                cur = next;
-                continue;
+    // Compute each lake's actual water budget from local runoff, evaporation, and external
+    // inflows. Summing q over lake cells double-counts water accumulated inside the same lake.
+    let mut lake_net = vec![0.0f64; lakes.len()];
+    for i in 0..n {
+        if lake_of[i] != NO_LAKE {
+            let p = clim.precip[i] as f64;
+            let runoff = (p - 0.65 * pet[i]).max(0.0);
+            lake_net[lake_of[i] as usize] += runoff - pet[i];
+        } else {
+            let r = rec[i] as usize;
+            if r < n && lake_of[r] != NO_LAKE {
+                lake_net[lake_of[r] as usize] += q[i];
             }
-            q[next] += net;
-            raw[next] += net;
-            break;
+        }
+    }
+    for &(k, v) in feed {
+        if lake_of[k] != NO_LAKE {
+            lake_net[lake_of[k] as usize] += v;
         }
     }
 
-    for lake in &mut lakes {
+    // A positive-water lake close to a mapped river can become that river's real source.
+    // Existing outlets were already included in the first water-balance routing pass.
+    let had_outlet: Vec<bool> = lakes.iter().map(|lake| lake.outlet.is_some()).collect();
+    connect_lakes_to_river_channels(
+        w, h, land, &lake_of, &fl.filled, &q, river_threshold, &mut rec,
+        &mut lakes, &lake_net,
+    );
+
+    // Route every lake's net outflow through the complete receiver chain.
+    let mut lake_order: Vec<usize> = (0..lakes.len()).collect();
+    lake_order.sort_by(|&a, &b| lakes[b].level_ft.total_cmp(&lakes[a].level_ft).then(a.cmp(&b)));
+    for lake_id in lake_order {
+        if !had_outlet[lake_id] && lakes[lake_id].outlet.is_some() {
+            route_lake_outflow(lake_id, land, &lake_of, &rec, &mut lake_net, &mut q, &mut raw, &lakes);
+        }
+    }
+
+    for lake_id in 0..lakes.len() {
+        let lake = &mut lakes[lake_id];
         let exit = lake.outlet.map(|c| c as usize).unwrap_or_else(|| lake.cells.iter().map(|&c| c as usize).max_by(|&x, &y| raw[x].total_cmp(&raw[y]).then(x.cmp(&y))).unwrap());
         let evap: f64 = lake.cells.iter().map(|&c| pet[c as usize]).sum();
-        let inflow = lake.cells.iter().map(|&c| q[c as usize]).sum::<f64>();
+        let inflow = lake_net[lake_id].max(0.0);
         let ratio = inflow / evap.max(1.0);
         let precip = lake.cells.iter().map(|&c| clim.precip[c as usize] as f64).sum::<f64>() / lake.cells.len() as f64;
         lake.kind = if lake.outlet.is_some() && inflow > 0.0 {
@@ -254,11 +269,166 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
         }
     }
 
+    // The lake-to-river pass changes receivers after the first routing order was used for q.
+    // Rebuild the order before deriving accumulation and basin ids from the final graph.
+    let route_order = receiver_order(w, h, land, &mut rec);
     let flow_accumulation = accumulate_flow(w, h, land, &lake_of, &rec, &route_order);
     let basin_id = assign_basin_ids(w, h, land, &lake_of, &rec);
-    let rivers = extract_rivers(w, h, cell_ft, land, &lake_of, &rec, &q, &flow_accumulation, &basin_id, RIVER_Q / river_density.max(0.05), &lakes);
+    let rivers = extract_rivers(w, h, cell_ft, land, &lake_of, &rec, &q, &flow_accumulation, &basin_id, river_threshold, &lakes);
     debug_assert!(validate_river_network(w, h, land, &lake_of, &rec, &rivers));
     Hydro { water, flow_accumulation, basin_id, discharge: q.iter().map(|&v| v as f32).collect(), receiver: rec, lake_of, lakes, rivers }
+}
+
+fn connect_lakes_to_river_channels(
+    w: usize,
+    h: usize,
+    land: &[bool],
+    lake_of: &[u32],
+    filled: &[f64],
+    q: &[f64],
+    threshold: f64,
+    rec: &mut [u32],
+    lakes: &mut [Lake],
+    lake_net: &[f64],
+) {
+    if lakes.is_empty() { return; }
+    const MAX_CONNECT_CELLS: usize = 24;
+    let min_q = (threshold * 0.50).max(1.0);
+    let mut order: Vec<usize> = (0..lakes.len()).collect();
+    order.sort_by(|&a, &b| lakes[b].level_ft.total_cmp(&lakes[a].level_ft).then(a.cmp(&b)));
+
+    let mut boundaries = Vec::with_capacity(lakes.len());
+    for lake in lakes.iter() {
+        let mut edge = Vec::new();
+        for &c in &lake.cells {
+            if neighbors(w, h, c as usize).any(|(nb, _)| land[nb] && lake_of[nb] == NO_LAKE) { edge.push(c); }
+        }
+        boundaries.push(edge);
+    }
+
+    for lake_id in order {
+        if lakes[lake_id].outlet.is_some() || lake_net[lake_id] <= threshold * 0.10 || boundaries[lake_id].is_empty() { continue; }
+        let Some((source_cell, path, target)) = lake_river_spill_path(
+            w, h, land, lake_of, filled, q, rec, min_q, lakes[lake_id].level_ft,
+            MAX_CONNECT_CELLS, &boundaries[lake_id],
+        ) else { continue; };
+        if receiver_path_would_cycle(source_cell, &path, target, rec) { continue; }
+        if path.is_empty() {
+            rec[source_cell as usize] = target;
+        } else {
+            rec[source_cell as usize] = path[0];
+            for pair in path.windows(2) { rec[pair[0] as usize] = pair[1]; }
+            rec[*path.last().unwrap() as usize] = target;
+        }
+        lakes[lake_id].outlet = Some(source_cell);
+    }
+}
+
+fn lake_river_spill_path(
+    w: usize,
+    h: usize,
+    land: &[bool],
+    lake_of: &[u32],
+    filled: &[f64],
+    q: &[f64],
+    rec: &[u32],
+    min_q: f64,
+    source_level: f64,
+    max_radius: usize,
+    boundary: &[u32],
+) -> Option<(u32, Vec<u32>, u32)> {
+    let mut min_x = w; let mut min_y = h; let mut max_x = 0usize; let mut max_y = 0usize;
+    for &c in boundary {
+        let x = c as usize % w; let y = c as usize / w;
+        min_x = min_x.min(x); min_y = min_y.min(y); max_x = max_x.max(x); max_y = max_y.max(y);
+    }
+    min_x = min_x.saturating_sub(max_radius); min_y = min_y.saturating_sub(max_radius);
+    max_x = (max_x + max_radius + 1).min(w); max_y = (max_y + max_radius + 1).min(h);
+    if min_x >= max_x || min_y >= max_y { return None; }
+    let bw = max_x - min_x;
+    let local = |c: usize| -> usize { (c / w - min_y) * bw + (c % w - min_x) };
+    let global = |k: usize| -> usize { min_y + k / bw * w + min_x + k % bw };
+    const ROOT: u32 = u32::MAX - 1;
+    let mut parent = vec![u32::MAX; bw * (max_y - min_y)];
+    let mut source_cell = vec![u32::MAX; bw * (max_y - min_y)];
+    let mut queue = VecDeque::new();
+
+    for &lake_cell in boundary {
+        for (nb, _) in neighbors(w, h, lake_cell as usize) {
+            if !land[nb] || lake_of[nb] != NO_LAKE { continue; }
+            let x = nb % w; let y = nb / w;
+            if x < min_x || x >= max_x || y < min_y || y >= max_y || filled[nb] > source_level + 2.0 { continue; }
+            let k = local(nb);
+            if parent[k] != u32::MAX { continue; }
+            parent[k] = ROOT; source_cell[k] = lake_cell; queue.push_back(nb);
+        }
+    }
+
+    while let Some(cur) = queue.pop_front() {
+        for (nb, _) in neighbors(w, h, cur) {
+            if nb % w < min_x || nb % w >= max_x || nb / w < min_y || nb / w >= max_y { continue; }
+            if land[nb] && lake_of[nb] == NO_LAKE && q[nb] >= min_q && receiver_reaches_water(nb, land, lake_of, rec, 64) {
+                let mut path = vec![cur as u32];
+                let mut k = local(cur);
+                while parent[k] != ROOT {
+                    let p = parent[k] as usize;
+                    path.push(global(p) as u32);
+                    k = p;
+                }
+                path.reverse();
+                return Some((source_cell[k], path, nb as u32));
+            }
+            if !land[nb] || lake_of[nb] != NO_LAKE || filled[nb] > source_level + 2.0 || filled[nb] > filled[cur] + 0.5 { continue; }
+            let k = local(nb);
+            if parent[k] != u32::MAX { continue; }
+            parent[k] = local(cur) as u32;
+            queue.push_back(nb);
+        }
+    }
+    None
+}
+
+fn route_lake_outflow(
+    lake_id: usize,
+    land: &[bool],
+    lake_of: &[u32],
+    rec: &[u32],
+    lake_net: &mut [f64],
+    q: &mut [f64],
+    raw: &mut [f64],
+    lakes: &[Lake],
+) {
+    let Some(outlet) = lakes[lake_id].outlet else { return; };
+    let net = lake_net[lake_id].max(0.0);
+    if net <= 0.0 { return; }
+    let n = rec.len();
+    let mut cur = outlet as usize;
+    for _ in 0..n {
+        let next = rec[cur] as usize;
+        if next >= n || next == cur { break; }
+        if lake_of[next] != NO_LAKE {
+            let target = lake_of[next] as usize;
+            if target == lake_id { cur = next; continue; }
+            lake_net[target] += net;
+            break;
+        }
+        if !land[next] { break; }
+        q[next] += net;
+        raw[next] += net;
+        cur = next;
+    }
+}
+
+fn receiver_reaches_water(start: usize, land: &[bool], lake_of: &[u32], rec: &[u32], max_steps: usize) -> bool {
+    let n = rec.len();
+    let mut cur = start;
+    for _ in 0..max_steps.min(n) {
+        let next = rec[cur] as usize;
+        if next >= n || next == cur { return false; }
+        if !land[next] || lake_of[next] != NO_LAKE { return true; }
+        cur = next;
+    }
+    false
 }
 
 fn repair_nearby_water_sinks(w: usize, h: usize, land: &[bool], lake_of: &[u32], filled: &[f64], rec: &mut [u32], max_radius: usize) {
@@ -707,7 +877,7 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
     let is_seed = |i: usize| {
         land[i]
             && lake_of[i] == NO_LAKE
-            && ((lake_feed[i] && q[i] >= threshold * 0.04)
+            && ((lake_feed[i] && q[i] >= threshold * 0.12)
                 || (q[i] >= threshold && !upstream_above_threshold[i]))
     };
     let mut channel = vec![false; n];
@@ -833,11 +1003,7 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
         };
         let source_cell = *cells.first().unwrap() as usize;
         let source_lake = neighbors(w, h, source_cell).filter_map(|(nb, _)| (lake_of[nb] != NO_LAKE && rec[nb] as usize == source_cell).then_some(lake_of[nb])).min();
-        let mut qv: Vec<f32> = cells.iter().map(|&cc| q[cc as usize] as f32).collect();
-        if source_lake.is_some() {
-            let floor = (threshold * 0.5).max(RIVER_Q * 0.12) as f32;
-            for v in &mut qv { *v = (*v).max(floor); }
-        }
+        let qv: Vec<f32> = cells.iter().map(|&cc| q[cc as usize] as f32).collect();
         chains.push(River { cells, q: qv, mouth, into, order: seg_order[root].max(1), drainage_area_cells: accumulation[source_cell], peak_discharge: 0.0, tributary_count: 0, source_lake, mouth_lake, length_cells: 0, length_ft: 0.0, basin_id: basin_id.get(source_cell).copied().unwrap_or(0), source_cell: source_cell as u32, terminal_receiver: None });
         for &sid in &path {
             let main_child = path.iter().position(|&p| p == sid).and_then(|i| path.get(i + 1)).copied();
@@ -855,25 +1021,30 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
         }).then_some(next as u32);
     }
     let tributary_counts: Vec<u16> = (0..chains.len()).map(|id| chains.iter().filter(|r| r.into == Some(id)).count().min(u16::MAX as usize) as u16).collect();
-    // A mapped river that dead-ends on a land cell is only a true dry river when it is
-    // isolated. If a sea or lake is a few cells away, recover that terminal as a coastal/lake
-    // mouth so the river does not visibly stop on land beside water.
+    // Extend a mapped river only along its real receiver chain when the mapped threshold
+    // was crossed before the river reached water. Never jump to the nearest unrelated water.
     for chain in &mut chains {
-        let last = *chain.cells.last().unwrap() as usize;
-        let mut receiver = chain.terminal_receiver.map(|c| c as usize);
-        let mut mouth = chain.mouth;
-        let mut lake_id = chain.mouth_lake;
-        if mouth == Mouth::Dry || receiver.is_none() {
-            if let Some((r, m, l)) = nearby_water_terminal(w, h, land, lake_of, last, 12) {
-                receiver = Some(r);
-                mouth = m;
-                lake_id = l;
+        if !matches!(chain.mouth, Mouth::Ocean | Mouth::Lake) || chain.terminal_receiver.is_some() { continue; }
+        let mut cur = *chain.cells.last().unwrap() as usize;
+        let mut reached = false;
+        for _ in 0..48 {
+            let next = rec[cur] as usize;
+            if next >= n || next == cur { break; }
+            if !land[next] || lake_of[next] != NO_LAKE {
+                chain.terminal_receiver = Some(next as u32);
+                reached = true;
+                break;
             }
+            if channel[next] { break; }
+            chain.cells.push(next as u32);
+            chain.q.push(q[next] as f32);
+            cur = next;
         }
-        // Keep terminal_receiver as the immediate receiver. The complete receiver graph is retained in Hydro.
-        chain.mouth = mouth;
-        chain.mouth_lake = lake_id;
-        chain.terminal_receiver = chain.terminal_receiver.or(receiver.map(|r| r as u32));
+        if !reached {
+            chain.mouth = Mouth::Dry;
+            chain.mouth_lake = None;
+            chain.terminal_receiver = None;
+        }
     }
 
     for (id, chain) in chains.iter_mut().enumerate() {
@@ -896,34 +1067,6 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
         chain.drainage_area_cells = chain.cells.iter().map(|&cc| accumulation[cc as usize]).max().unwrap_or(chain.drainage_area_cells);
     }
     chains
-}
-
-fn nearby_water_terminal(w: usize, h: usize, land: &[bool], lake_of: &[u32], start: usize, max_radius: usize) -> Option<(usize, Mouth, Option<u32>)> {
-    let sx = start % w;
-    let sy = start / w;
-    for radius in 1..=max_radius {
-        let x0 = sx.saturating_sub(radius);
-        let x1 = (sx + radius).min(w.saturating_sub(1));
-        let y0 = sy.saturating_sub(radius);
-        let y1 = (sy + radius).min(h.saturating_sub(1));
-        let mut best: Option<(usize, usize, usize)> = None;
-        for y in y0..=y1 {
-            for x in x0..=x1 {
-                let k = y * w + x;
-                if land[k] && lake_of[k] == NO_LAKE { continue; }
-                let d = sx.abs_diff(x) + sy.abs_diff(y);
-                if d > radius { continue; }
-                let key = (d, y * w + x, k);
-                if best.map_or(true, |b| key < b) { best = Some(key); }
-            }
-        }
-        if let Some((_, _, k)) = best {
-            if !land[k] { return Some((k, Mouth::Ocean, None)); }
-            let id = lake_of[k];
-            if id != NO_LAKE { return Some((k, Mouth::Lake, Some(id))); }
-        }
-    }
-    None
 }
 
 fn validate_river_network(w: usize, h: usize, land: &[bool], lake_of: &[u32], rec: &[u32], rivers: &[River]) -> bool {
@@ -1113,7 +1256,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn lake_outflow_is_added_to_downstream_receiver() {
         let mut q = vec![0.0f64; 4];
         let raw = vec![0.0f64; 4];
@@ -1221,6 +1363,21 @@ mod tests {
         assert_eq!(rivers[0].cells, vec![2, 3]);
         assert_eq!(rivers[0].terminal_receiver, Some(4));
         assert_eq!(rivers[0].mouth, Mouth::Ocean);
+    }
+
+    #[test]
+    fn river_terminal_extends_only_along_the_receiver_graph() {
+        let land = vec![true, true, true, false];
+        let lake = vec![NO_LAKE; 4];
+        let rec = vec![1, 2, 3, 3];
+        let q = vec![100.0, 100.0, 20.0, 0.0];
+        let acc = vec![1, 2, 3, 0];
+        let basin = vec![9u64; 4];
+        let rivers = extract_rivers(4, 1, 1.0, &land, &lake, &rec, &q, &acc, &basin, 90.0, &[]);
+        assert_eq!(rivers.len(), 1);
+        assert_eq!(rivers[0].cells, vec![0, 1, 2]);
+        assert_eq!(rivers[0].mouth, Mouth::Ocean);
+        assert_eq!(rivers[0].terminal_receiver, Some(3));
     }
 
     #[test]
