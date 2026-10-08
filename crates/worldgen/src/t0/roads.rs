@@ -257,9 +257,11 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
 /// closer to both ends) plus a minimum spanning tree so its members stay connected.
 fn link_edges(settlements: &[Settlement], classes: &[RoadClass]) -> Vec<(usize, usize, RoadClass)> {
     let ns = settlements.len();
-    let d = |a: usize, b: usize| {
+    let d2 = |a: usize, b: usize| {
         let (sa, sb) = (&settlements[a], &settlements[b]);
-        crate::core::sqrt((sa.x - sb.x) * (sa.x - sb.x) + (sa.y - sb.y) * (sa.y - sb.y))
+        let dx = sa.x - sb.x;
+        let dy = sa.y - sb.y;
+        dx * dx + dy * dy
     };
     fn find(p: &mut [usize], mut x: usize) -> usize {
         while p[x] != x {
@@ -269,46 +271,94 @@ fn link_edges(settlements: &[Settlement], classes: &[RoadClass]) -> Vec<(usize, 
         x
     }
     let mut edges: Vec<(usize, usize, RoadClass)> = Vec::new();
-    for (class, min_tier, max_mi) in [(RoadClass::KingsRoad, Tier::City, 450.0), (RoadClass::Road, Tier::Town, 160.0), (RoadClass::Track, Tier::Village, 45.0)] {
+    for (class, min_tier, max_mi) in [
+        (RoadClass::KingsRoad, Tier::City, 450.0),
+        (RoadClass::Road, Tier::Town, 160.0),
+        (RoadClass::Track, Tier::Village, 45.0),
+    ] {
         if !classes.contains(&class) {
             continue;
         }
-        let max_link = max_mi * 5280.0;
+        let max_link: f64 = max_mi * 5280.0;
+        let max_link2 = max_link * max_link;
         let members: Vec<usize> = (0..ns).filter(|&i| settlements[i].tier >= min_tier).collect();
-        let add = |a: usize, b: usize, edges: &mut Vec<(usize, usize, RoadClass)>| {
-            let (a, b) = (a.min(b), a.max(b));
-            if !edges.iter().any(|e| e.0 == a && e.1 == b) {
-                edges.push((a, b, class));
-            }
-        };
+        if members.len() < 2 {
+            continue;
+        }
+        // Spatially bound pair discovery. The old implementation materialized every pair and
+        // then performed an all-settlement lune test, which was effectively O(n^3).
+        let bucket_side = max_link.max(1.0);
+        let mut buckets: std::collections::BTreeMap<(i64, i64), Vec<usize>> = Default::default();
+        for &i in &members {
+            let bx = crate::core::floor(settlements[i].x / bucket_side) as i64;
+            let by = crate::core::floor(settlements[i].y / bucket_side) as i64;
+            buckets.entry((bx, by)).or_default().push(i);
+        }
         let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
-        for (ia, &a) in members.iter().enumerate() {
-            for &b in &members[ia + 1..] {
-                let dab = d(a, b);
-                if dab < max_link {
-                    pairs.push((dab, a, b));
+        for &a in &members {
+            let ax = crate::core::floor(settlements[a].x / bucket_side) as i64;
+            let ay = crate::core::floor(settlements[a].y / bucket_side) as i64;
+            for by in ay - 1..=ay + 1 {
+                for bx in ax - 1..=ax + 1 {
+                    let Some(list) = buckets.get(&(bx, by)) else { continue };
+                    for &b in list {
+                        if b <= a { continue; }
+                        let dab2 = d2(a, b);
+                        if dab2 < max_link2 {
+                            pairs.push((crate::core::sqrt(dab2), a, b));
+                        }
+                    }
                 }
             }
         }
-        pairs.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
+        pairs.sort_unstable_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
+
+        // Exact relative-neighbourhood test, but only inspect buckets that can contain a point
+        // inside the lune. This preserves the graph rule without scanning every settlement.
+        let mut class_edges: Vec<(usize, usize, RoadClass)> = Vec::new();
         for &(dab, a, b) in &pairs {
-            if members.iter().all(|&c| c == a || c == b || d(a, c).max(d(b, c)) >= dab) {
-                add(a, b, &mut edges);
+            let ax = crate::core::floor(settlements[a].x / bucket_side) as i64;
+            let ay = crate::core::floor(settlements[a].y / bucket_side) as i64;
+            let radius_buckets = (dab / bucket_side).ceil() as i64 + 1;
+            let mut blocked = false;
+            'lune: for by in ay - radius_buckets..=ay + radius_buckets {
+                for bx in ax - radius_buckets..=ax + radius_buckets {
+                    let Some(list) = buckets.get(&(bx, by)) else { continue };
+                    for &c in list {
+                        if c == a || c == b { continue; }
+                        if d2(a, c) < dab * dab && d2(b, c) < dab * dab {
+                            blocked = true;
+                            break 'lune;
+                        }
+                    }
+                }
+            }
+            if !blocked {
+                class_edges.push((a.min(b), a.max(b), class));
             }
         }
+
+        // Restore connectivity for this road class only. Previous classes must not influence this
+        // class's spanning tree, otherwise a king's road could accidentally make a town-road
+        // component look connected without receiving its own link.
         let mut parent: Vec<usize> = (0..ns).collect();
-        for &(_, a, b) in &pairs {
+        for &(a, b, _) in &class_edges {
+            let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+            if ra != rb { parent[ra] = rb; }
+        }
+        for &(dab, a, b) in &pairs {
             let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
             if ra != rb {
                 parent[ra] = rb;
-                add(a, b, &mut edges);
+                class_edges.push((a.min(b), a.max(b), class));
             }
         }
+        edges.extend(class_edges);
     }
-
+    edges.sort_unstable_by_key(|e| (e.0, e.1, e.2 as u8));
+    edges.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
     edges
 }
-
 /// A* routes for the links, in order (later routes reuse earlier ones). Returns the best
 /// (lowest) class per cell (`u8::MAX` = none) and each route's cells.
 pub fn route(inp: &Inputs, settlements: &[Settlement], edges: &[(usize, usize, RoadClass)]) -> (Vec<u8>, Vec<(RoadClass, Vec<u32>)>) {

@@ -278,7 +278,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 (((value * 1_000_000_000.0).round()) as i64, k)
             })
             .collect();
-        cands.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        cands.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         let spacing = spacing_mi * 5280.0 / cell;
         // A settlement of this tier at cell `k`, standing at (x, y) ft.
         let make = |k: usize, rng: &mut Pcg32, x: f64, y: f64, pin: Option<u32>| {
@@ -360,12 +360,12 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         let grid_w = (w + bucket_side - 1) / bucket_side;
         let grid_h = (h + bucket_side - 1) / bucket_side;
         let mut placed_cells: Vec<Vec<usize>> = vec![Vec::new(); grid_w * grid_h];
-        for s in &out {
+        for (si, s) in out.iter().enumerate() {
             let x = s.cell % w;
             let y = s.cell / w;
             let bx = (x / bucket_side).min(grid_w - 1);
             let by = (y / bucket_side).min(grid_h - 1);
-            placed_cells[by * grid_w + bx].push(s.cell);
+            placed_cells[by * grid_w + bx].push(si);
         }
         for &(_, k) in &cands {
             if placed >= count {
@@ -379,8 +379,8 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             let mut ok = true;
             'nearby: for ny in by.saturating_sub(1)..=(by + 1).min(grid_h - 1) {
                 for nx in bx.saturating_sub(1)..=(bx + 1).min(grid_w - 1) {
-                    for &other_cell in &placed_cells[ny * grid_w + nx] {
-                        let s = &out[other_cell];
+                    for &si in &placed_cells[ny * grid_w + nx] {
+                        let s = &out[si];
                         let (sx, sy) = ((s.cell % w) as f64, (s.cell / w) as f64);
                         let d = crate::core::sqrt((sx - cx) * (sx - cx) + (sy - cy) * (sy - cy));
                         let need = if s.tier >= tier { spacing } else { min_spacing };
@@ -395,7 +395,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 continue;
             }
             out.push(make(k, &mut rng, cx * cell, cy * cell, None));
-            placed_cells[by * grid_w + bx].push(k);
+            placed_cells[by * grid_w + bx].push(out.len() - 1);
             placed += 1;
         }
     }
