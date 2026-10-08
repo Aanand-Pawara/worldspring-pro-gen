@@ -26,6 +26,10 @@ pub const DELTA_MIN_CELLS: usize = 12;
 pub const DELTA_MAX_GRADE: f64 = 0.04;
 const MIN_LAKE_CELLS: usize = 12;
 const MIN_LAKE_DEPTH_FT: f64 = 60.0;
+// Small terrain/priority-flood quantization can make genuinely level lakes differ by a few feet.
+// Allow that tolerance for spill connectivity, but still require a real terrain path.
+const LAKE_LEVEL_EPSILON_FT: f64 = 6.0;
+const LAKE_SPILL_TOLERANCE_FT: f64 = 6.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -286,110 +290,11 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
     let flow_accumulation = accumulate_flow(w, h, land, &lake_of, &rec, &route_order);
     let basin_id = assign_basin_ids(w, h, land, &lake_of, &rec);
     let rivers = extract_rivers(w, h, cell_ft, land, &lake_of, &rec, &q, &flow_accumulation, &basin_id, river_threshold, &lakes);
-    add_headwater_ponds(w, h, land, &lake_of, height, &rivers, &mut water);
     debug_assert!(validate_river_network(w, h, land, &lake_of, &rec, &rivers));
     debug_assert!(lakes.iter().enumerate().all(|(lake_id, _)| lake_receiver_chain_valid(lake_id, land, &lake_of, &rec, &lakes)));
     Hydro { water, flow_accumulation, basin_id, discharge: q.iter().map(|&v| v as f32).collect(), receiver: rec, lake_of, lakes, rivers }
 }
 
-
-/// Give non-lake river sources a tiny, unnamed headwater pond in the actual water surface.
-/// These ponds stay below the lake classification thresholds and use an irregular connected
-/// footprint rather than a synthetic circle. Hydrology topology is unchanged: the source cell
-/// remains the river's first receiver cell and lake_of never includes these ponds.
-fn add_headwater_ponds(
-    w: usize,
-    h: usize,
-    land: &[bool],
-    lake_of: &[u32],
-    height: &[f64],
-    rivers: &[River],
-    water: &mut [f32],
-) {
-    const MAX_POND_CELLS: usize = 8;
-    const MIN_POND_CELLS: usize = 4;
-    const MAX_RISE_FT: f64 = 8.0;
-    const WATER_DEPTH_FT: f64 = 2.5;
-
-    fn hash(mut x: u64) -> u64 {
-        x ^= x >> 30;
-        x = x.wrapping_mul(0xbf58476d1ce4e5b9);
-        x ^= x >> 27;
-        x = x.wrapping_mul(0x94d049bb133111eb);
-        x ^ (x >> 31)
-    }
-
-    for (river_index, river) in rivers.iter().enumerate() {
-        if river.source_lake.is_some() || river.cells.is_empty() {
-            continue;
-        }
-        let source = river.source_cell as usize;
-        if source >= height.len() || !land[source] || lake_of[source] != NO_LAKE {
-            continue;
-        }
-
-        let base = height[source];
-        let target = MIN_POND_CELLS
-            + (hash((source as u64) ^ ((river_index as u64) << 32)) as usize
-                % (MAX_POND_CELLS - MIN_POND_CELLS + 1));
-
-        let mut pond = Vec::with_capacity(MAX_POND_CELLS);
-        let mut frontier = Vec::<usize>::with_capacity(16);
-        pond.push(source);
-
-        for (nb, _) in neighbors(w, h, source) {
-            if land[nb] && lake_of[nb] == NO_LAKE && height[nb] <= base + MAX_RISE_FT {
-                frontier.push(nb);
-            }
-        }
-
-        while pond.len() < target && !frontier.is_empty() {
-            let mut best = None;
-            let mut best_score = f64::INFINITY;
-            for (i, &cell) in frontier.iter().enumerate() {
-                if pond.iter().any(|&p| p == cell) {
-                    continue;
-                }
-                let rise = (height[cell] - base).max(0.0);
-                let jitter = (hash((cell as u64) ^ ((river_index as u64 + 1) * 0x9e3779b97f4a7c15))
-                    & 0xffff) as f64 / 65535.0;
-                let score = rise * 12.0 + jitter * 5.0;
-                if score < best_score {
-                    best_score = score;
-                    best = Some(i);
-                }
-            }
-            let Some(index) = best else { break; };
-            let cell = frontier.swap_remove(index);
-            if pond.iter().any(|&p| p == cell) {
-                continue;
-            }
-            pond.push(cell);
-
-            for (nb, _) in neighbors(w, h, cell) {
-                if !land[nb] || lake_of[nb] != NO_LAKE || height[nb] > base + MAX_RISE_FT {
-                    continue;
-                }
-                if !pond.iter().any(|&p| p == nb) && !frontier.iter().any(|&p| p == nb) {
-                    frontier.push(nb);
-                }
-            }
-        }
-
-        if pond.len() < MIN_POND_CELLS {
-            continue;
-        }
-
-        let level = pond.iter()
-            .map(|&cell| height[cell])
-            .fold(f64::NEG_INFINITY, f64::max)
-            + WATER_DEPTH_FT;
-
-        for cell in pond {
-            water[cell] = water[cell].max(level as f32);
-        }
-    }
-}
 
 fn connect_lakes_to_river_channels(
     w: usize,
@@ -691,7 +596,7 @@ fn lake_ocean_spill_path(
                 return Some((source_cell[k], path, nb as u32));
             }
 
-            if lake_of[nb] != NO_LAKE || filled[nb] > source_level + 1.0 || filled[nb] > filled[cur] + 1.0 { continue; }
+            if lake_of[nb] != NO_LAKE || filled[nb] > source_level + 1.0 || filled[nb] > filled[cur] + LAKE_SPILL_TOLERANCE_FT { continue; }
             let next_saddle = saddle.max((filled[nb] * 100.0).max(0.0) as u64);
             let uphill = (filled[nb] - filled[cur]).max(0.0);
             let next_cost = cost
@@ -742,16 +647,17 @@ fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], fille
     // that we process high lakes first but do NOT require the lower lake to already have an
     // outlet. That lower lake may be the next link in the chain and will receive its own outlet
     // when its turn arrives. This is the topology Great-Lakes-style systems need.
-    const MAX_CONNECT_CELLS: usize = 48;
-    // Lakes at the same water level can be one hydrologic system separated by a narrow
-    // strait/channel. This is how the Michigan-Huron part of the real Great Lakes behaves.
-    const LAKE_LEVEL_EPSILON_FT: f64 = 0.05;
+    const MAX_CONNECT_CELLS: usize = 64;
 
     for lake_id in 0..lakes.len() {
-        lakes[lake_id].outlet = lakes[lake_id].cells.iter().copied().find(|&c| {
-            let r = rec[c as usize] as usize;
-            r != c as usize && (r < lake_of.len()) && lake_of[r] != lake_id as u32
-        });
+        lakes[lake_id].outlet = lakes[lake_id].cells.iter().copied()
+            .filter_map(|c| {
+                let r = rec[c as usize] as usize;
+                if r == c as usize || r >= lake_of.len() || lake_of[r] == lake_id as u32 { return None; }
+                Some((filled[r], filled[c], c))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)))
+            .map(|(_, _, c)| c);
     }
 
     let mut bounds = Vec::with_capacity(lakes.len());
@@ -813,7 +719,7 @@ fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], fille
 
         // Try a small deterministic shortlist. The bounded spill search does the expensive
         // terrain test, so proximity alone can never create a connection over a ridge.
-        for (_, _, _, _, target) in candidates.into_iter().take(8) {
+        for (_, _, _, _, target) in candidates.into_iter().take(16) {
             let Some((source_cell, path, target_cell)) = lake_spill_path(
                 w, h, land, lake_of, filled, lakes[source].level_ft,
                 &boundaries[source], &boundaries[target], target as u32,
@@ -1014,7 +920,7 @@ fn lake_spill_path(
         for (nb, _) in neighbors(w, h, lake_cell as usize) {
             if !land[nb] || lake_of[nb] != NO_LAKE { continue; }
             let x = nb % w; let y = nb / w;
-            if x < min_x || x >= max_x || y < min_y || y >= max_y || filled[nb] > source_level + 1.0 { continue; }
+            if x < min_x || x >= max_x || y < min_y || y >= max_y || filled[nb] > source_level + LAKE_SPILL_TOLERANCE_FT { continue; }
             let k = local(nb);
             let saddle = (filled[nb].max(source_level) * 100.0).max(0.0) as u64;
             if saddle < best_saddle[k] {
@@ -1045,7 +951,7 @@ fn lake_spill_path(
                 return Some((source_cell[k], path, nb as u32));
             }
 
-            if !land[nb] || lake_of[nb] != NO_LAKE || filled[nb] > source_level + 1.0 { continue; }
+            if !land[nb] || lake_of[nb] != NO_LAKE || filled[nb] > source_level + LAKE_SPILL_TOLERANCE_FT { continue; }
             if filled[nb] > filled[cur] + 1.0 { continue; }
 
             let next_saddle = saddle.max((filled[nb] * 100.0).max(0.0) as u64);
@@ -1765,6 +1671,30 @@ mod tests {
             cur = rec[cur] as usize;
         }
         panic!("equal-level lakes did not connect");
+    }
+
+    #[test]
+    fn nearly_equal_lakes_connect_across_small_flood_quantization() {
+        let w = 12;
+        let h = 3;
+        let n = w * h;
+        let mut lake = vec![NO_LAKE; n];
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        for x in 2..4 { lake[1 * w + x] = 0; a.push((1 * w + x) as u32); }
+        for x in 5..7 { lake[1 * w + x] = 1; b.push((1 * w + x) as u32); }
+        let land = lake.iter().map(|&id| id == NO_LAKE).collect::<Vec<_>>();
+        let filled = (0..n).map(|i| {
+            let x = i % w;
+            if x == 4 { 104.0 } else { 100.0 }
+        }).collect::<Vec<_>>();
+        let mut rec: Vec<u32> = (0..n).map(|i| i as u32).collect();
+        let mut lakes = vec![
+            Lake { level_ft: 100.0, cells: a, kind: LakeKind::Fresh, max_depth_ft: 100.0, outlet: None, inlet_count: 0 },
+            Lake { level_ft: 100.04, cells: b, kind: LakeKind::Fresh, max_depth_ft: 100.0, outlet: None, inlet_count: 0 },
+        ];
+        connect_close_lakes(w, h, &land, &lake, &filled, &mut rec, &mut lakes);
+        assert!(lakes[0].outlet.is_some() || lakes[1].outlet.is_some());
     }
 
     #[test]
