@@ -51,6 +51,8 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
       const answer = (): string =>
         a.op === 'query'
           ? c.query_json(a.x, a.y)
+          : a.op === 'climate_debug'
+            ? c.climate_debug_json(a.field, a.month)
           : a.op === 'search'
             ? c.search_json(a.q, a.rect ? new Float64Array(a.rect) : undefined)
             : a.op === 'inview'

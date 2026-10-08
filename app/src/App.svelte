@@ -18,6 +18,7 @@
   import GenerateTab from './ui/world/GenerateTab.svelte';
   import LibraryTab from './ui/world/LibraryTab.svelte';
   import AlmanacTab from './ui/world/AlmanacTab.svelte';
+  import ClimateTab from './ui/world/ClimateTab.svelte';
   import { WorldDraft } from './ui/world/draft.svelte';
   import Icon from './ui/Icon.svelte';
   import Readout from './ui/shell/Readout.svelte';
@@ -94,7 +95,7 @@
   }
   function closeKingdomDetail() { kingdomDetailId = null; }
 
-  function openWorldTab(tab: 'generate' | 'sketch' | 'almanac' | 'library') {
+  function openWorldTab(tab: 'generate' | 'sketch' | 'climate' | 'almanac' | 'library') {
     // World tabs must use the same lifecycle gate as section navigation.
     go('world', tab);
   }
@@ -1570,11 +1571,12 @@
       tabs={[
         { key: 'generate', label: 'Generate', icon: 'globe' },
         { key: 'sketch', label: 'Sketch', icon: 'sketch', dot: sketchOn, title: sketchOn ? 'Sketching' : 'Draw coastlines, ranges, rivers, biomes and settlements' },
+        { key: 'climate', label: 'Climate', icon: 'activity' },
         { key: 'almanac', label: 'Almanac', icon: 'book' },
         { key: 'library', label: 'Library', icon: 'folder' },
       ]}
       tab={shell.tabs.world}
-      onTab={(k) => openWorldTab(k as 'generate' | 'sketch' | 'almanac' | 'library')}
+      onTab={(k) => openWorldTab(k as 'generate' | 'sketch' | 'climate' | 'almanac' | 'library')}
       onClose={() => go(null)}
       ask={shell.ask ? askBar : undefined}
     >
@@ -1622,6 +1624,8 @@
                 <button class="ws-btn primary" onclick={enterSketch} disabled={busy}><Icon name="sketch" size={16} /> Start sketching</button>
               </div>
             {/if}
+          {:else if shell.tabs.world === 'climate'}
+            <ClimateTab gen={view.gen} ready={ready} />
           {:else if shell.tabs.world === 'almanac'}
             <AlmanacTab {world} {overlay} kingdomId={kingdomDetailId} onCloseKingdom={closeKingdomDetail} onSelect={(f) => select({ kind: 'feature', feature: f })} onSelectKingdom={selectKingdom} />
           {:else}

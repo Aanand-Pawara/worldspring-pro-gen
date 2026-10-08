@@ -115,16 +115,42 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
 
     let seed = world.stream("t0.climate.perturb");
     let two_pi = 2.0 * std::f64::consts::PI;
+    let mut latitudes = vec![0.0f64; h];
+    let mut lat_norms = vec![0.0f64; h];
+    let mut wu = vec![0.0f64; n];
+    let mut wv = vec![0.0f64; n];
+    for j in 0..h {
+        let lat = latitude(world, j, h);
+        let alat = lat.abs();
+        latitudes[j] = lat;
+        lat_norms[j] = libm::sin(alat.to_radians()).abs().clamp(0.0, 1.0);
+        let zonal = match p.wind {
+            Wind::FromWest => 1.0,
+            Wind::FromEast => -1.0,
+            Wind::Belts => {
+                let mid = smoothstep(25.0, 35.0, alat);
+                let polar = smoothstep(55.0, 65.0, alat);
+                2.0 * mid - 1.0 - 2.0 * polar
+            }
+        };
+        for i in 0..w {
+            let k = j*w+i;
+            wu[k] = zonal * cfg.wind_strength;
+            wind_u[k] = wu[k] as f32;
+        }
+    }
+    let mut base_temp = vec![0.0f64; n];
+    let mut local_evap = vec![0.0f64; n];
+    let mut next_h = vec![0.0f64; n];
+    let mut rain = vec![0.0f64; n];
 
     for month in 0..MONTHS {
         let phase = (month as f64 + 0.5) / 12.0;
         let decl = cfg.axial_tilt_deg * libm::sin(two_pi * (phase - 0.5));
-        let mut base_temp = vec![0.0f64; n];
 
         for j in 0..h {
-            let lat = latitude(world, j, h);
-            let alat = lat.abs();
-            let lat_norm = libm::sin(alat.to_radians()).abs().clamp(0.0, 1.0);
+            let lat = latitudes[j];
+            let lat_norm = lat_norms[j];
             let annual = cfg.equatorial_temp_c
                 + (cfg.polar_temp_c - cfg.equatorial_temp_c) * libm::pow(lat_norm, 1.45);
             let seasonal = 13.0 * cfg.seasonality_strength
@@ -152,8 +178,6 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
             }
         }
 
-        let mut wu = vec![0.0f64; n];
-        let mut wv = vec![0.0f64; n];
         for j in 0..h {
             let lat = latitude(world, j, h);
             let alat = lat.abs();
@@ -177,11 +201,10 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
             }
         }
 
-        let mut local_evap = vec![0.0f64; n];
         for k in 0..n {
             let t = base_temp[k];
             let warm = smoothstep(-5.0, 32.0, t);
-            let solar = solar_factor(latitude(world, k / w, h), decl);
+            let solar = solar_factor(latitudes[k / w], decl);
             let wet = soil[k] as f64;
             let humidity_deficit = (1.0 - humidity[k] as f64).clamp(0.05, 1.0);
             let source = if !land[k] {
@@ -192,7 +215,7 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
             local_evap[k] = source * cfg.evaporation_strength * humidity_deficit;
         }
 
-        let mut next_h = humidity.iter().map(|&v| v as f64).collect::<Vec<_>>();
+        for (dst, &v) in next_h.iter_mut().zip(&humidity) { *dst = v as f64; }
         for _ in 0..3 {
             for j in 0..h {
                 for i in 0..w {
@@ -207,7 +230,6 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
             humidity.iter_mut().zip(&next_h).for_each(|(a, &b)| *a = b as f32);
         }
 
-        let mut rain = vec![0.0f64; n];
         for j in 0..h {
             for i in 0..w {
                 let k = j * w + i;

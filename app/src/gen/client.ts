@@ -42,6 +42,7 @@ export class GenClient {
   private readyReject: ((reason?: unknown) => void) | null = null;
   private asks = new Map<number, (json: string) => void>();
   private nextAsk = 1;
+  private climateCache = new Map<string, import('./protocol').ClimateDebug>();
 
   constructor() {
     this.worker.onmessage = (e: MessageEvent<FromCoordinator>) => {
@@ -73,6 +74,7 @@ export class GenClient {
   /** (Re)initialize with a world file. Resolves once T0 exists in every generator worker. */
   init(world: WorldFile): Promise<Ready> {
     this.sentFields = null;
+    this.climateCache.clear();
     const cores = navigator.hardwareConcurrency || 4;
     const workers = Math.max(1, Math.min(6, cores - 2));
     return new Promise((resolve, reject) => {

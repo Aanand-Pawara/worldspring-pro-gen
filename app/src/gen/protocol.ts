@@ -270,8 +270,21 @@ export interface SpriteMeta {
 }
 
 /** Gazetteer questions answered by a generator worker (see `worldgen::gazetteer`). */
+export type ClimateDebugField = 'temperature' | 'precipitation' | 'humidity' | 'evaporation' | 'soil_moisture' | 'snow' | 'continentality' | 'orographic' | 'wind' | 'climate_class';
+
+export interface ClimateDebug {
+  w: number;
+  h: number;
+  month: number;
+  field: ClimateDebugField;
+  min: number;
+  max: number;
+  values: number[];
+}
+
 export type Ask =
   | { op: 'query'; x: number; y: number }
+  | { op: 'climate_debug'; field: ClimateDebugField; month: number }
   /** `rect` (x0, y0, x1, y1 ft) limits the search to that area. */
   | { op: 'search'; q: string; rect?: [number, number, number, number] }
   | { op: 'districts'; settlement: number }
