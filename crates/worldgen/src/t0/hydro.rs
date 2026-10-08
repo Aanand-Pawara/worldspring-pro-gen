@@ -102,7 +102,7 @@ pub struct Hydro {
 }
 
 /// `feed`: extra discharge entering at cells (sketched rivers' sources).
-pub fn build(w: usize, h: usize, cell_ft: f64, _height: &mut [f64], land: &[bool], clim: &Climate, sea: f64, river_density: f64, feed: &[(usize, f64)]) -> Hydro {
+pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool], clim: &Climate, sea: f64, river_density: f64, feed: &[(usize, f64)]) -> Hydro {
     let n = w * h;
     let outlet: Vec<bool> = land.iter().map(|l| !l).collect();
     let fl = priority_flood(w, h, height, &outlet, 0.01);
