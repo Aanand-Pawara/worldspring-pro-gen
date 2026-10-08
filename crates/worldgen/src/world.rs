@@ -23,6 +23,34 @@ pub enum Wind {
     FromEast,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClimateParams {
+    pub axial_tilt_deg: f64,
+    pub solar_constant: f64,
+    pub equatorial_temp_c: f64,
+    pub polar_temp_c: f64,
+    pub lapse_rate_c_per_km: f64,
+    pub ocean_temp_influence: f64,
+    pub continentality_strength: f64,
+    pub evaporation_strength: f64,
+    pub moisture_transport_strength: f64,
+    pub orographic_strength: f64,
+    pub rain_shadow_strength: f64,
+    pub wind_strength: f64,
+    pub seasonality_strength: f64,
+}
+impl Default for ClimateParams {
+    fn default() -> Self {
+        Self {
+            axial_tilt_deg: 23.44, solar_constant: 1361.0, equatorial_temp_c: 28.0, polar_temp_c: -8.0,
+            lapse_rate_c_per_km: 6.5, ocean_temp_influence: 0.72, continentality_strength: 0.8,
+            evaporation_strength: 1.0, moisture_transport_strength: 1.0, orographic_strength: 1.0,
+            rain_shadow_strength: 1.0, wind_strength: 1.0, seasonality_strength: 1.0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WorldParams {
@@ -42,6 +70,8 @@ pub struct WorldParams {
     pub lat_top: f64,
     pub lat_bottom: f64,
     pub wind: Wind,
+    /// Earth-like controls for the coarse monthly climate solver.
+    pub climate: ClimateParams,
     /// Added to every temperature (°C).
     pub temp_offset_c: f64,
     /// Multiplies precipitation, 0.2..3.
@@ -75,6 +105,7 @@ impl Default for WorldParams {
             lat_top: 62.0,
             lat_bottom: 8.0,
             wind: Wind::Belts,
+            climate: ClimateParams::default(),
             temp_offset_c: 0.0,
             moisture: 1.0,
             volcanoes: 2,
@@ -93,7 +124,7 @@ impl WorldParams {
     }
 
     fn validate(&self) -> Result<(), String> {
-        let checks: [(bool, &str); 13] = [
+        let checks: [(bool, &str); 26] = [
             ((150.0..=3000.0).contains(&self.width_mi), "width_mi must be 150–3000"),
             ((100.0..=3000.0).contains(&self.height_mi), "height_mi must be 100–3000"),
             ((0.05..=0.95).contains(&self.land_fraction), "land_fraction must be 0.05–0.95"),
@@ -107,6 +138,19 @@ impl WorldParams {
             ((1000.0..=30000.0).contains(&self.max_elev_ft), "max_elev_ft must be 1000–30000"),
             ((0.0..=3.0).contains(&self.settlement_density), "settlement_density must be 0–3"),
             ((0.0..=3.0).contains(&self.poi_density), "poi_density must be 0–3"),
+            ((0.0..=45.0).contains(&self.climate.axial_tilt_deg), "climate axial_tilt_deg must be 0–45"),
+            ((500.0..=2500.0).contains(&self.climate.solar_constant), "climate solar_constant must be 500–2500"),
+            ((-40.0..=45.0).contains(&self.climate.equatorial_temp_c), "climate equatorial_temp_c out of range"),
+            ((-80.0..=20.0).contains(&self.climate.polar_temp_c), "climate polar_temp_c out of range"),
+            ((2.0..=12.0).contains(&self.climate.lapse_rate_c_per_km), "climate lapse_rate_c_per_km must be 2–12"),
+            ((0.0..=1.0).contains(&self.climate.ocean_temp_influence), "climate ocean_temp_influence must be 0–1"),
+            ((0.0..=2.0).contains(&self.climate.continentality_strength), "climate continentality_strength must be 0–2"),
+            ((0.0..=3.0).contains(&self.climate.evaporation_strength), "climate evaporation_strength must be 0–3"),
+            ((0.1..=3.0).contains(&self.climate.moisture_transport_strength), "climate moisture_transport_strength must be 0.1–3"),
+            ((0.0..=3.0).contains(&self.climate.orographic_strength), "climate orographic_strength must be 0–3"),
+            ((0.0..=3.0).contains(&self.climate.rain_shadow_strength), "climate rain_shadow_strength must be 0–3"),
+            ((0.1..=3.0).contains(&self.climate.wind_strength), "climate wind_strength must be 0.1–3"),
+            ((0.0..=2.0).contains(&self.climate.seasonality_strength), "climate seasonality_strength must be 0–2"),
         ];
         match checks.iter().find(|(ok, _)| !ok) {
             Some((_, msg)) => Err((*msg).to_string()),

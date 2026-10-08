@@ -143,8 +143,20 @@ pub fn classify(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64],
         let pr = clim.precip[k] as f64;
         let nz = fbm(noise, i as f64 / 7.0, j as f64 / 7.0, 3, 2.0, 0.5);
 
-        // Climate niches: best two by weighted score.
+        // The physical climate class supplies the primary signal; the existing weighted
+        // Whittaker scores remain responsible for ecotones and local blending.
         let mut score = [0.0f64; ALL.len()];
+        let class_hint = match clim.class[k] {
+            0 => Some(Biome::Jungle), 1 => Some(Biome::Jungle), 2 => Some(Biome::Savanna),
+            3 => Some(Biome::HotDesert), 4 => Some(Biome::ColdDesert), 5 => Some(Biome::Steppe),
+            6 => Some(Biome::TemperateForest), 7 => Some(Biome::TemperateForest),
+            8 => Some(Biome::Grassland), 9 => Some(Biome::TemperateRainforest),
+            10 => Some(Biome::Taiga), 11 => Some(Biome::Taiga), 12 => Some(Biome::Tundra),
+            13 => Some(Biome::Alpine), 14 => Some(Biome::Ice), _ => None,
+        };
+        if let Some(b) = class_hint {
+            score[b as usize] += 1.5 * weights.iter().copied().fold(1.0, f64::max).min(1.5);
+        }
         for (idx, &(b, tc, pc, st, sp)) in NICHES.iter().enumerate() {
             let dt = (t - tc) / st;
             let dp = (pr - pc) / sp;

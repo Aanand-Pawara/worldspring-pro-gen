@@ -93,6 +93,27 @@ struct Shaped {
 pub struct T0Extra {
     pub temp: Vec<f32>,
     pub precip: Vec<f32>,
+    pub humidity: Vec<f32>,
+    pub evap: Vec<f32>,
+    pub soil_moisture: Vec<f32>,
+    pub snow: Vec<f32>,
+    pub snowmelt: Vec<f32>,
+    pub continentality: Vec<f32>,
+    pub orographic: Vec<f32>,
+    pub wind_u: Vec<f32>,
+    pub wind_v: Vec<f32>,
+    pub temp_range: Vec<f32>,
+    pub summer_precip: Vec<f32>,
+    pub winter_precip: Vec<f32>,
+    pub snowfall: Vec<f32>,
+    pub growing_season: Vec<f32>,
+    pub climate_class: Vec<u8>,
+    pub monthly_temp: Vec<f32>,
+    pub monthly_precip: Vec<f32>,
+    pub monthly_humidity: Vec<f32>,
+    pub monthly_evap: Vec<f32>,
+    pub monthly_soil: Vec<f32>,
+    pub monthly_snow: Vec<f32>,
     pub hydro: hydro::Hydro,
     pub volcanoes: Vec<volcano::Volcano>,
     pub overlay: Overlay,
@@ -219,6 +240,7 @@ impl T0 {
 
         progress("climate", 0.0);
         let clim = climate::build(world, w, h, cell, &height, &land);
+        debug_assert!(climate::validate(w, h, &land, &height, &clim).is_empty());
         progress("rivers", 0.0);
         let hydro = hydro::build(w, h, cell, &mut height, &land, &clim, sea, p.river_density, &feed);
 
@@ -441,7 +463,16 @@ impl T0 {
         t0.settlements = settlements.clone();
         t0.base_pois = pois.len();
         t0.pois = pois.clone();
-        t0.extra = Some(T0Extra { temp: clim.temp, precip: clim.precip, hydro, volcanoes, overlay, settlements, pois, crossings: network.crossings, politics });
+        t0.extra = Some(T0Extra {
+            temp: clim.temp, precip: clim.precip, humidity: clim.humidity, evap: clim.evap,
+            soil_moisture: clim.soil_moisture, snow: clim.snow, snowmelt: clim.snowmelt,
+            continentality: clim.continentality, orographic: clim.orographic,
+            wind_u: clim.wind_u, wind_v: clim.wind_v, temp_range: clim.temp_range,
+            summer_precip: clim.summer_precip, winter_precip: clim.winter_precip,
+            snowfall: clim.snowfall, growing_season: clim.growing_season, climate_class: clim.class,
+            monthly_temp: clim.monthly_temp, monthly_precip: clim.monthly_precip,
+            monthly_humidity: clim.monthly_humidity, monthly_evap: clim.monthly_evap,
+            monthly_soil: clim.monthly_soil, monthly_snow: clim.monthly_snow, hydro, volcanoes, overlay, settlements, pois, crossings: network.crossings, politics });
         t0
     }
 

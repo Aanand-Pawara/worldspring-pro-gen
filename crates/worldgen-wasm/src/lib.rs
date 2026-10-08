@@ -107,6 +107,43 @@ impl Ctx {
         Ok(worldgen::battlemap::pack(&self.world, &chunk))
     }
 
+    /// Climate debug layer. Month 0..11 selects a monthly field; 12 selects the annual field.
+    /// Field: temperature, precipitation, humidity, evaporation, soil_moisture, snow,
+    /// continentality, orographic, wind, climate_class.
+    pub fn climate_debug_json(&self, field: &str, month: u8) -> Result<String, JsError> {
+        let t0 = self.t0.as_ref().ok_or_else(|| JsError::new("T0 not loaded"))?;
+        let e = t0.extra.as_ref().ok_or_else(|| JsError::new("climate data not retained"))?;
+        let n = t0.height.w * t0.height.h;
+        if month > 12 { return Err(JsError::new("month must be 0..11 or 12 for annual")); }
+        let mut values = Vec::<f32>::new();
+        match (field, month) {
+            ("temperature", m) if m < 12 => values.extend_from_slice(&e.monthly_temp[m as usize * n..(m as usize + 1) * n]),
+            ("precipitation", m) if m < 12 => values.extend_from_slice(&e.monthly_precip[m as usize * n..(m as usize + 1) * n]),
+            ("humidity", m) if m < 12 => values.extend_from_slice(&e.monthly_humidity[m as usize * n..(m as usize + 1) * n]),
+            ("evaporation", m) if m < 12 => values.extend_from_slice(&e.monthly_evap[m as usize * n..(m as usize + 1) * n]),
+            ("soil_moisture", m) if m < 12 => values.extend_from_slice(&e.monthly_soil[m as usize * n..(m as usize + 1) * n]),
+            ("snow", m) if m < 12 => values.extend_from_slice(&e.monthly_snow[m as usize * n..(m as usize + 1) * n]),
+            ("temperature", 12) => values.extend_from_slice(&e.temp),
+            ("precipitation", 12) => values.extend_from_slice(&e.precip),
+            ("humidity", 12) => values.extend_from_slice(&e.humidity),
+            ("evaporation", 12) => values.extend_from_slice(&e.evap),
+            ("soil_moisture", 12) => values.extend_from_slice(&e.soil_moisture),
+            ("snow", 12) => values.extend_from_slice(&e.snow),
+            ("continentality", _) => values.extend_from_slice(&e.continentality),
+            ("orographic", _) => values.extend_from_slice(&e.orographic),
+            ("wind", _) => values.extend(e.wind_u.iter().zip(&e.wind_v).map(|(&u, &v)| (u*u + v*v).sqrt())),
+            ("climate_class", _) => values.extend(e.climate_class.iter().map(|&v| v as f32)),
+            _ => return Err(JsError::new("unknown climate debug field")),
+        }
+        let mut min = f32::INFINITY;
+        let mut max = f32::NEG_INFINITY;
+        for &v in &values { min = min.min(v); max = max.max(v); }
+        serde_json::to_string(&serde_json::json!({
+            "w": t0.height.w, "h": t0.height.h, "month": month, "field": field,
+            "min": min, "max": max, "values": values
+        })).map_err(|e| JsError::new(&e.to_string()))
+    }
+
     /// What is at a world position: a building or a settlement (JSON, or `null`).
     pub fn query_json(&self, x: f64, y: f64) -> String {
         match &self.t0 {

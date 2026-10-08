@@ -5,6 +5,22 @@ import type { PreparedChunk } from './battlePrep';
 export type Wind = 'belts' | 'from_west' | 'from_east';
 
 /** Mirrors `worldgen::WorldParams` (crates/worldgen/src/world.rs). */
+export interface ClimateParams {
+  axial_tilt_deg: number;
+  solar_constant: number;
+  equatorial_temp_c: number;
+  polar_temp_c: number;
+  lapse_rate_c_per_km: number;
+  ocean_temp_influence: number;
+  continentality_strength: number;
+  evaporation_strength: number;
+  moisture_transport_strength: number;
+  orographic_strength: number;
+  rain_shadow_strength: number;
+  wind_strength: number;
+  seasonality_strength: number;
+}
+
 export interface WorldParams {
   width_mi: number;
   height_mi: number;
@@ -17,6 +33,7 @@ export interface WorldParams {
   lat_top: number;
   lat_bottom: number;
   wind: Wind;
+  climate: ClimateParams;
   temp_offset_c: number;
   moisture: number;
   volcanoes: number;
