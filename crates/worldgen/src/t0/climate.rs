@@ -96,9 +96,11 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
     let mut soil = vec![0.35f32; n];
     let mut snow = vec![0.0f32; n];
     let mut snowmelt = vec![0.0f32; n];
+    // Oceans begin humid and land begins moderately moist; both fields then evolve through the water cycle.
     let mut orographic = vec![0.0f32; n];
     let mut wind_u = vec![0.0f32; n];
     let mut wind_v = vec![0.0f32; n];
+    for k in 0..n { if !land[k] { humidity[k] = 0.78; soil[k] = 1.0; } }
 
     let mut monthly_temp = vec![0.0f32; n * MONTHS];
     let mut monthly_precip = vec![0.0f32; n * MONTHS];
@@ -216,15 +218,15 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
         }
 
         for (dst, &v) in next_h.iter_mut().zip(&humidity) { *dst = v as f64; }
-        for _ in 0..3 {
+        for _ in 0..4 {
             for j in 0..h {
                 for i in 0..w {
                     let k = j * w + i;
                     let speed = libm::sqrt(wu[k] * wu[k] + wv[k] * wv[k]).max(0.2);
                     let step = (cfg.moisture_transport_strength * (0.7 + 0.35 * speed)).clamp(0.5, 2.5);
                     let upstream = sample_bilinear_f32(&humidity, w, h, i as f64 - wu[k] * step, j as f64 - wv[k] * step);
-                    let source = if !land[k] { 1.0 } else { local_evap[k] * 0.17 };
-                    next_h[k] = (0.62 * upstream as f64 + 0.38 * (humidity[k] as f64 + source)).clamp(0.0, 1.0);
+                    let source = if !land[k] { 0.95 } else { local_evap[k] * 0.36 };
+                    next_h[k] = (0.74 * upstream as f64 + 0.26 * (humidity[k] as f64 + source)).clamp(0.0, 1.0);
                 }
             }
             humidity.iter_mut().zip(&next_h).for_each(|(a, &b)| *a = b as f32);
@@ -237,15 +239,20 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
                 let fy = (wv[k] * 2.0).clamp(-2.0, 2.0);
                 let ahead = sample_bilinear(&smooth, w, h, i as f64 + fx, j as f64 + fy);
                 let rise_km = ((ahead - smooth[k]).max(0.0) * 0.0003048) / 2.0;
-                let lift = (rise_km * (0.65 + 0.35 * libm::sqrt(wu[k] * wu[k] + wv[k] * wv[k]))).clamp(0.0, 1.0);
+                let wind_speed = libm::sqrt(wu[k] * wu[k] + wv[k] * wv[k]);
+                let lift = (rise_km * (0.65 + 0.35 * wind_speed)).clamp(0.0, 1.0);
                 let lat = latitude(world, j, h);
                 let convergence = libm::exp(-((lat - decl) / 16.0) * ((lat - decl) / 16.0));
                 let saturation = (humidity[k] as f64 * (0.45 + 0.85 * convergence)).clamp(0.0, 1.5);
                 let oro = lift * saturation * cfg.orographic_strength;
+                let descent_km = ((-rise_km).max(0.0) * 2.0).min(8.0);
+                let rain_shadow = (1.0 - 0.55 * (1.0 - libm::exp(-descent_km * 1.15 * cfg.rain_shadow_strength))).clamp(0.45, 1.0);
                 orographic[k] += oro as f32 / MONTHS as f32;
-                let base_rain = (0.018 + 0.07 * convergence) * saturation;
+                // Restore an Earth-like precipitation scale while retaining circulation, terrain,
+                // and moisture-recycling controls instead of applying a visual biome boost.
+                let base_rain = (0.045 + 0.11 * convergence) * saturation * rain_shadow;
                 rain[k] = ((base_rain + oro * (0.42 + 0.58 * cfg.rain_shadow_strength))
-                    * 145.0 * (0.75 + 0.25 * solar_factor(lat, decl)) * p.moisture).max(0.0);
+                    * 520.0 * (0.75 + 0.25 * solar_factor(lat, decl)) * p.moisture).max(0.0);
             }
         }
 
