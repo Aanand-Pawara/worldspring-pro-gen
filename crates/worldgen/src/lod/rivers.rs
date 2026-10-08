@@ -118,7 +118,7 @@ impl RiverCurve {
     pub fn belt(&self, k: usize, t: f64, cell_ft: f64) -> ([f64; 2], [f64; 2], f64) {
         let f = self.frame(k, t, cell_ft);
         let half = f.taper * (f.amp + 1.2 * f.w) + 0.5 * f.w;
-        ([f.base[0] + f.nrm[0] * off, f.base[1] + f.nrm[1] * off], f.nrm, half)
+        ([f.base[0], f.base[1]], f.nrm, half)
     }
 
     fn frame(&self, k: usize, t: f64, cell_ft: f64) -> Frame {
