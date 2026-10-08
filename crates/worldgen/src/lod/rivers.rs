@@ -142,7 +142,6 @@ impl RiverCurve {
         let lerp = |a: f64, b: f64| a + (b - a) * t;
         let q = lerp(self.q[k] as f64, self.q[k1] as f64);
         let z = lerp(self.z[k] as f64, self.z[k1] as f64);
-        let s = lerp(self.s[k], self.s[k1]);
         let phase = lerp(self.phase[k], self.phase[k1]);
         let taper = lerp(self.taper[k] as f64, self.taper[k1] as f64);
 
@@ -171,6 +170,7 @@ impl RiverCurve {
     }
 }
 
+#[allow(dead_code)]
 struct Frame {
     base: [f64; 2],
     nrm: [f64; 2],
