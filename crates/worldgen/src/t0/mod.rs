@@ -26,7 +26,7 @@ use crate::core::noise::{fbm, smoothstep};
 use features::Overlay;
 use volcano::Activity;
 
-const MAGIC: u32 = 0x5430_4734; // "T0G4"
+const MAGIC: u32 = 0x5430_4735; // "T0G5"
 /// Height of the bank at the dry edge of a shore cell above the water (ft).
 const SHORE_BANK_FT: f64 = 6.0;
 /// Ocean distance encoded in the biome texture saturates here (ft).
@@ -36,6 +36,9 @@ pub struct T0 {
     pub height: Grid<f32>,
     /// Water surface elevation (sea / lake level) or `hydro::DRY`.
     pub water: Grid<f32>,
+    /// Authoritative lake component per T0 cell. `NO_LAKE` means ocean or land.
+    /// Serialized with T0 so worker-generated tiles use the same lake topology as generation.
+    pub lake_of: Vec<u32>,
     /// Distance from land for ocean cells (ft); 0 on land.
     pub coast: Grid<f32>,
     /// primary | secondary << 8 | blend << 16 (see `biome::classify`).
@@ -263,7 +266,7 @@ impl T0 {
         let biome_seed = world.stream("t0.biome.warp");
         // Water where its level is above the ground the terrain draws (T0::ground_at, which
         // needs the height mips: a road-less T0 serves for it).
-        let ground_t0 = Self::from_grids(
+        let mut ground_t0 = Self::from_grids(
             Grid::from_vec(w, h, height.iter().map(|&v| v as f32).collect()),
             water_grid.clone(),
             Grid::from_vec(w, h, vec![0.0; n]),
@@ -273,6 +276,7 @@ impl T0 {
             RiverNet::default(),
             RoadNet::new(Vec::new(), (w - 1) as f64 * cell, (h - 1) as f64 * cell, cell),
         );
+        ground_t0.lake_of = hydro.lake_of.clone();
         let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
         let wet = |x: f64, y: f64| {
             let level = ground_t0.sample_water(x, y);
@@ -422,6 +426,7 @@ impl T0 {
             rivers,
             road_net,
         );
+        t0.lake_of = hydro.lake_of.clone();
         // Road beds follow the ground the terrain actually builds along them (road corridors
         // keep refinement detail off it), so they cut and fill a few feet, not trenches.
         let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
@@ -452,7 +457,8 @@ impl T0 {
             let next = mips.last().unwrap().downsample();
             mips.push(next);
         }
-        T0 { height, water, coast, biome, cell_ft, rivers, roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), biome_seed, mips, extra: None }
+        let n = height.w * height.h;
+        T0 { height, water, lake_of: vec![hydro::NO_LAKE; n], coast, biome, cell_ft, rivers, roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), biome_seed, mips, extra: None }
     }
 
     fn with_settlements(mut self, settlements: Vec<settle::Settlement>, pois: Vec<settle::Poi>) -> T0 {
@@ -524,14 +530,14 @@ impl T0 {
 
     /// (level over the wet corners or `DRY`, bilinear wet fraction 0..1).
     pub fn sample_lake(&self, x_ft: f64, y_ft: f64) -> (f32, f64) {
-        if let Some(extra) = &self.extra {
+        if self.lake_of.len() == self.water.w * self.water.h {
             return lake_at_topology(
                 &self.water,
                 self.cell_ft,
                 self.biome_seed,
                 x_ft,
                 y_ft,
-                &extra.hydro.lake_of,
+                &self.lake_of,
             );
         }
         lake_at(&self.water, self.cell_ft, self.biome_seed, x_ft, y_ft)
@@ -691,7 +697,7 @@ impl T0 {
     /// Grids needed by tile generation (not the generation-time extras).
     pub fn to_bytes(&self) -> Vec<u8> {
         let (w, h) = (self.height.w, self.height.h);
-        let mut out = Vec::with_capacity(28 + w * h * 16);
+        let mut out = Vec::with_capacity(28 + w * h * 20);
         out.extend_from_slice(&MAGIC.to_le_bytes());
         out.extend_from_slice(&(w as u32).to_le_bytes());
         out.extend_from_slice(&(h as u32).to_le_bytes());
@@ -703,6 +709,9 @@ impl T0 {
             }
         }
         for v in &self.biome.data {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        for v in &self.lake_of {
             out.extend_from_slice(&v.to_le_bytes());
         }
         // Rivers: count, then per river: point count, seed, then (x, y) f64 + (z, q, taper) f32.
@@ -770,7 +779,13 @@ impl T0 {
         let base = 28;
         let biome_end = base + 4 * n * 4;
         let biome = bytes[base + 3 * n * 4..biome_end].chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
-        let mut o = biome_end;
+        let lake_end = biome_end + n * 4;
+        let lake_of = bytes.get(biome_end..lake_end)
+            .ok_or("truncated T0 lake topology")?
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        let mut o = lake_end;
         let mut take = |len: usize| -> Result<&[u8], String> {
             let slice = bytes.get(o..o + len).ok_or("truncated T0 rivers")?;
             o += len;
@@ -845,7 +860,7 @@ impl T0 {
         }
         let map_w = (w - 1) as f64 * cell_ft;
         let map_h = (h - 1) as f64 * cell_ft;
-        Ok(Self::from_grids(
+        let mut t0 = Self::from_grids(
             Grid::from_vec(w, h, f32s(base)),
             Grid::from_vec(w, h, f32s(base + n * 4)),
             Grid::from_vec(w, h, f32s(base + 2 * n * 4)),
@@ -855,7 +870,9 @@ impl T0 {
             RiverNet::new(curves, map_w, map_h, cell_ft),
             RoadNet::new(road_curves, map_w, map_h, cell_ft),
         )
-        .with_settlements(settlements, pois))
+        .with_settlements(settlements, pois);
+        t0.lake_of = lake_of;
+        Ok(t0)
     }
 }
 
@@ -1174,5 +1191,33 @@ mod lake_sampling_tests {
         let lake_of = vec![0, 1, hydro::NO_LAKE, hydro::NO_LAKE];
         let (_, mask) = lake_at_topology(&g, 1.0, 0, 0.5, 0.5, &lake_of);
         assert!(mask > 0.0 && mask < 1.0);
+    }
+}
+
+
+#[cfg(test)]
+mod lake_topology_serialization_tests {
+    use super::*;
+
+    #[test]
+    fn deserialized_t0_uses_persisted_lake_topology() {
+        let w = 2;
+        let h = 2;
+        let lake = vec![0, 0, hydro::NO_LAKE, hydro::NO_LAKE];
+        let water = Grid::from_vec(w, h, vec![100.0, 100.0, hydro::DRY, hydro::DRY]);
+        let mut t = T0::from_grids(
+            Grid::from_vec(w, h, vec![99.0; 4]),
+            water,
+            Grid::from_vec(w, h, vec![0.0; 4]),
+            Grid::from_vec(w, h, vec![0; 4]),
+            1.0,
+            0,
+            RiverNet::default(),
+            RoadNet::new(Vec::new(), 1.0, 1.0, 1.0),
+        );
+        t.lake_of = lake;
+        let bytes = t.to_bytes();
+        let loaded = T0::from_bytes(&bytes).expect("T0 roundtrip");
+        assert_eq!(loaded.lake_of, vec![0, 0, hydro::NO_LAKE, hydro::NO_LAKE]);
     }
 }
