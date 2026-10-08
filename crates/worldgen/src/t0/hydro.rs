@@ -1313,7 +1313,7 @@ fn accumulate_flow(w: usize, h: usize, land: &[bool], _lake_of: &[u32], rec: &[u
     acc
 }
 
-fn extract_rivers(w: usize, h: usize, _cell_ft: f64, land: &[bool], lake_of: &[u32], rec: &[u32], q: &[f64], accumulation: &[u32], basin_id: &[u64], threshold: f64, lakes: &[Lake]) -> Vec<River> {
+fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u32], rec: &[u32], q: &[f64], accumulation: &[u32], basin_id: &[u64], threshold: f64, lakes: &[Lake]) -> Vec<River> {
     let n = w * h;
     let threshold = threshold.max(1.0);
     let mut lake_feed = vec![false; n];
