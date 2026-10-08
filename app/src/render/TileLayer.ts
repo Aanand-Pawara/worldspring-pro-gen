@@ -146,7 +146,10 @@ export class TileLayer {
     for (let l = 0; l <= geom.max_level; l++) {
       const level = { terrain: new Container(), rivers: new Container(), roads: new Container(), sites: new Container() };
       this.levels.push(level);
-      this.container.addChild(level.terrain, level.rivers, level.roads, level.sites);
+      // Settlement fills/ink must sit below hydrology. Otherwise an opaque town polygon
+      // paints over a river and makes a valid river-to-lake connection appear to terminate.
+      // Roads remain above rivers so bridges/crossings can be rendered on top.
+      this.container.addChild(level.terrain, level.sites, level.rivers, level.roads);
     }
     this.frameUniforms.uniforms.uSea = geom.sea_level_ft;
   }
