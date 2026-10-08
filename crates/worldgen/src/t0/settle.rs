@@ -417,11 +417,37 @@ pub fn snap_to_water(settlements: &mut [Settlement], cell: f64, wet: &dyn Fn(f64
         {
             let d = [s.x - p[0], s.y - p[1]];
             let dl = crate::core::sqrt(d[0] * d[0] + d[1] * d[1]).max(1e-6);
-            let off = hw + 0.25 * r;
+            // Keep the entire rendered settlement footprint off the river. The old
+            // quarter-radius offset only moved the centre, so large towns could still cover
+            // the river with their buildings. Put the settlement's outer reach just beyond
+            // the channel while preserving the intended river-town relationship.
+            let off = hw + crate::town::reach(s) + 120.0;
             (s.x, s.y) = (p[0] + d[0] / dl * off, p[1] + d[1] / dl * off);
         }
     }
 }
+
+    #[test]
+    fn river_town_clearance_uses_full_settlement_reach() {
+        let r = crate::town::urban_radius(Tier::City, 50_000);
+        let reach = crate::town::reach(&Settlement {
+            tier: Tier::City,
+            kind: SettleKind::River,
+            cell: 0,
+            x: 0.0,
+            y: 0.0,
+            population: 50_000,
+            coastal: false,
+            river: true,
+            capital: false,
+            kingdom_id: 0,
+            seed: 0,
+            culture: 0,
+            pin: None,
+        });
+        assert!(reach > r);
+        assert!(50.0 + reach + 120.0 > reach);
+    }
 
 /// Ruins and wizard towers, away from settlements; then cave mouths, mines and lava tubes
 /// (`volcanoes`: T0 cell centre and cone radius ft).
