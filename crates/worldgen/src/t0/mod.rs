@@ -945,7 +945,7 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
                     } else if hydro.lake_of[c] != hydro::NO_LAKE {
                         hydro.lakes[hydro.lake_of[c] as usize].level_ft as f32
                     } else {
-                        height[c] as f32
+                        hydro.flow_height[c]
                     }
                 })
                 .collect();
