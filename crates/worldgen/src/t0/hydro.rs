@@ -164,7 +164,7 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
     let route_order = receiver_order(w, h, land, &mut rec);
 
     // Water balance. `raw` ignores losses (catchment supply); `q` includes them.
-    let pet: Vec<f64> = clim.temp.iter().map(|&t| (350.0 + 55.0 * t as f64).max(0.0)).collect();
+    let pet: Vec<f64> = clim.evap.iter().map(|&e| e as f64).collect();
     let mut q = vec![0.0f64; n];
     let mut raw = vec![0.0f64; n];
     for &(k, v) in feed {
@@ -1227,7 +1227,7 @@ fn recompute_final_discharge(
     // part of that lake's budget instead of being copied into every lake cell.
     for &ii in order {
         let i = ii as usize;
-        let runoff = (clim.precip[i] as f64 - 0.65 * pet[i]).max(0.0);
+        let runoff = (clim.precip[i] as f64 - pet[i] * 0.9 + clim.snowmelt[i] as f64).max(0.0);
         if lake_of[i] != NO_LAKE {
             lake_net[lake_of[i] as usize] += runoff - pet[i];
             continue;
@@ -1313,7 +1313,7 @@ fn accumulate_flow(w: usize, h: usize, land: &[bool], _lake_of: &[u32], rec: &[u
     acc
 }
 
-fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u32], rec: &[u32], q: &[f64], accumulation: &[u32], basin_id: &[u64], threshold: f64, lakes: &[Lake]) -> Vec<River> {
+fn extract_rivers(w: usize, h: usize, _cell_ft: f64, land: &[bool], lake_of: &[u32], rec: &[u32], q: &[f64], accumulation: &[u32], basin_id: &[u64], threshold: f64, lakes: &[Lake]) -> Vec<River> {
     let n = w * h;
     let threshold = threshold.max(1.0);
     let mut lake_feed = vec![false; n];
@@ -1676,7 +1676,7 @@ fn validate_river_network(w: usize, h: usize, land: &[bool], lake_of: &[u32], re
 }
 
 fn append_lake_connectors(
-    w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u32], rec: &[u32],
+    w: usize, h: usize, _cell_ft: f64, land: &[bool], lake_of: &[u32], rec: &[u32],
     q: &[f64], accumulation: &[u32], basin_id: &[u64], lakes: &[Lake], chains: &mut Vec<River>,
 ) {
     let n = w * h;
@@ -2212,7 +2212,7 @@ mod hydrology_regression_tests {
         let lake = vec![NO_LAKE, 0, 0, NO_LAKE, NO_LAKE, NO_LAKE];
         let rec = vec![1, 2, 3, 4, 5, 5];
         let order = vec![0, 1, 2, 3, 4];
-        let clim = Climate { temp: vec![20.0; 6], precip: vec![500.0; 6] };
+        let clim = Climate { temp: vec![20.0; 6], precip: vec![500.0; 6], evap: vec![100.0; 6], snowmelt: vec![0.0; 6], ..Climate::default() };
         let lakes = vec![Lake { level_ft: 100.0, cells: vec![1, 2], kind: LakeKind::Fresh, max_depth_ft: 100.0, outlet: Some(2), inlet_count: 1 }];
         let (q, _) = recompute_final_discharge(6, 1, &land, &lake, &rec, &order, &clim, &[(0, 100_000.0)], &lakes);
         assert!(q[3] >= 25_000.0);
