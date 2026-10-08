@@ -898,7 +898,7 @@ pub fn lake_at(g: &Grid<f32>, cell_ft: f64, biome_seed: u64, x_ft: f64, y_ft: f6
 /// River curves from the hydrology chains. Water surface along each river is its cells'
 /// (filled, strictly decreasing) heights, ending at the sea or lake level at the mouth.
 /// Meanders are tapered to zero at sources, mouths and where tributaries join, so lines meet.
-fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[bool], hydro: &hydro::Hydro) -> RiverNet {
+fn build_river_net(world: &World, w: usize, cell: f64, _height: &[f64], land: &[bool], hydro: &hydro::Hydro) -> RiverNet {
     let sea = world.params().sea_level_ft;
     let h = height.len() / w;
     let chains = &hydro.rivers;
@@ -945,7 +945,7 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
                     } else if hydro.lake_of[c] != hydro::NO_LAKE {
                         hydro.lakes[hydro.lake_of[c] as usize].level_ft as f32
                     } else {
-                        height[c] as f32
+                        hydro.flow_height[c]
                     }
                 })
                 .collect();
@@ -976,7 +976,7 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
                             && chains[parent].cells.iter().any(|&cell_id| cell_id as usize == nb)
                         {
                             pts.push([(nb % w) as f64 * cell, (nb / w) as f64 * cell]);
-                            z.push(height[nb] as f32);
+                            z.push(hydro.flow_height[nb]);
                         }
                     }
                 }
@@ -988,7 +988,7 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
                     let Some(next) = hydro.receiver.get(cur).copied().map(|v| v as usize) else { break; };
                     if next >= height.len() || next == cur { break; }
                     let p = [(next % w) as f64 * cell, (next / w) as f64 * cell];
-                    let nz = if !land[next] { sea as f32 } else if hydro.lake_of[next] != hydro::NO_LAKE { hydro.lakes[hydro.lake_of[next] as usize].level_ft as f32 } else { height[next] as f32 };
+                    let nz = if !land[next] { sea as f32 } else if hydro.lake_of[next] != hydro::NO_LAKE { hydro.lakes[hydro.lake_of[next] as usize].level_ft as f32 } else { hydro.flow_height[next] };
                     pts.push(p); z.push(nz); cur = next;
                     if !land[cur] || hydro.lake_of[cur] != hydro::NO_LAKE { break; }
                 }

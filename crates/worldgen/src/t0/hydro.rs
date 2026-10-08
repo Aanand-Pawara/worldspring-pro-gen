@@ -85,6 +85,9 @@ pub struct River {
 }
 
 pub struct Hydro {
+    /// Hydrologically conditioned elevation used only for routing and accumulation.
+    /// The visual DEM remains untouched so drainage correction cannot flatten terrain.
+    pub flow_height: Vec<f32>,
     /// Water surface elevation per cell (sea level, lake level) or `DRY`.
     pub water: Vec<f32>,
     /// Number of routed land cells contributing to each active cell.
@@ -135,14 +138,9 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
             lakes.push(Lake { level_ft: level, cells: comp, kind: LakeKind::Fresh, max_depth_ft: depth, outlet: None, inlet_count: 0 });
         }
     }
-    // Fill every non-lake cell to the flooded surface: guarantees strictly downhill drainage.
-    for i in 0..n {
-        if land[i] && lake_of[i] == NO_LAKE {
-            height[i] = fl.filled[i];
-        }
-    }
-
-    let (mut rec, _) = receivers(w, h, &fl.filled);
+    // Use the conditioned surface only for hydrology. Never write it back into the visual DEM.
+    let flow_height = fl.filled.clone();
+    let (mut rec, _) = receivers(w, h, &flow_height);
 
     for lake_id in 0..lakes.len() {
         lakes[lake_id].outlet = None;
@@ -150,11 +148,9 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
 
     // Repair the receiver graph before deciding lake outlets. Priority-flood can leave a
     // perfectly valid flat lake without a receiver edge even when a low spill path exists.
-    repair_nearby_water_sinks(w, h, land, &lake_of, &fl.filled, &mut rec, 24);
-    connect_close_lakes(w, h, land, &lake_of, &fl.filled, &mut rec, &mut lakes);
-    connect_lakes_to_ocean(w, h, land, &lake_of, &fl.filled, sea, &mut rec, &mut lakes);
-    repair_nearby_water_sinks(w, h, land, &lake_of, &fl.filled, &mut rec, 24);
-
+        connect_close_lakes(w, h, land, &lake_of, &flow_height, &mut rec, &mut lakes);
+    connect_lakes_to_ocean(w, h, land, &lake_of, &flow_height, sea, &mut rec, &mut lakes);
+    
     for i in 0..n {
         if !land[i] || lake_of[i] != NO_LAKE { continue; }
         let r = rec[i] as usize;
@@ -227,11 +223,11 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
     // Existing outlets were already included in the first water-balance routing pass.
     let had_outlet: Vec<bool> = lakes.iter().map(|lake| lake.outlet.is_some()).collect();
     connect_lakes_to_river_channels(
-        w, h, land, &lake_of, &fl.filled, &q, river_threshold, &mut rec,
+        w, h, land, &lake_of, &flow_height, &q, river_threshold, &mut rec,
         &mut lakes, &lake_net, &lake_inflow,
     );
 
-    connect_nearby_river_termini_to_water(w, h, land, &lake_of, &fl.filled, &q, river_threshold, &mut rec);
+    // Closed inland basins are valid terminal hydrology; do not invent a nearby outlet.
     // Route every lake's net outflow through the complete receiver chain.
     let mut lake_order: Vec<usize> = (0..lakes.len()).collect();
     lake_order.sort_by(|&a, &b| lakes[b].level_ft.total_cmp(&lakes[a].level_ft).then(a.cmp(&b)));
@@ -286,12 +282,10 @@ pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool]
     let flow_accumulation = accumulate_flow(w, h, land, &lake_of, &rec, &route_order);
     let basin_id = assign_basin_ids(w, h, land, &lake_of, &rec);
     let rivers = extract_rivers(w, h, cell_ft, land, &lake_of, &rec, &q, &flow_accumulation, &basin_id, river_threshold, &lakes);
-    add_headwater_ponds(w, h, land, &lake_of, height, &rivers, &mut water);
-    shape_headwater_terrain(w, h, land, &lake_of, height, &rivers);
     debug_assert!(validate_hydrology(
         w, h, land, &lake_of, &rec, &lakes, &rivers, &water,
     ));
-    Hydro { water, flow_accumulation, basin_id, discharge: q.iter().map(|&v| v as f32).collect(), receiver: rec, lake_of, lakes, rivers }
+    Hydro { flow_height: flow_height.iter().map(|&v| v as f32).collect(), water, flow_accumulation, basin_id, discharge: q.iter().map(|&v| v as f32).collect(), receiver: rec, lake_of, lakes, rivers }
 }
 
 
@@ -1348,7 +1342,25 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
                 || (q[i] >= threshold && !upstream_above_threshold[i]))
     };
     let mut channel = vec![false; n];
-    let seeds: Vec<usize> = (0..n).filter(|&i| is_seed(i)).collect();
+    let mut seed_candidates: Vec<(f64, usize)> = (0..n)
+        .filter(|&i| is_seed(i))
+        .map(|i| (q[i] / threshold.max(1.0), i))
+        .collect();
+    seed_candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    let mut seeds = Vec::<usize>::with_capacity(seed_candidates.len());
+    for (_, candidate) in seed_candidates {
+        const SOURCE_SUPPRESSION_RADIUS: usize = 3;
+        let cx = candidate % w;
+        let cy = candidate / w;
+        if seeds.iter().any(|&other| {
+            basin_id[other] == basin_id[candidate]
+                && cx.abs_diff(other % w) <= SOURCE_SUPPRESSION_RADIUS
+                && cy.abs_diff(other / w) <= SOURCE_SUPPRESSION_RADIUS
+        }) {
+            continue;
+        }
+        seeds.push(candidate);
+    }
     for &start in &seeds {
         channel[start] = true;
         let mut cur = start;

@@ -708,28 +708,6 @@ impl Builder<'_> {
             let elev = self.above_sea(c);
             self.push("waterfall", NameKind::Waterfall, cx, cy, 0.0, 30.0 * inp.cell_ft, Some(elev.round()), Some(format!("drop ~{} ft", fmt_thousands(drop))));
         }
-        let river_sources: Vec<(String, f64, f64)> = self.out.features.iter()
-            .filter(|f| f.kind == "river" && f.source_feature_id.is_none())
-            .map(|f| (f.id.clone(), f.river_source_x.unwrap_or(f.x), f.river_source_y.unwrap_or(f.y)))
-            .collect();
-        for (river_id, x, y) in river_sources {
-            let pond_id = format!("{river_id}:source-pond");
-            self.out.features.push(Feature {
-                id: pond_id.clone(), kind: "pond", name: String::new(), x, y, angle: 0.0,
-                extent_ft: (inp.cell_ft * 1.8).max(80.0), elev_ft: None, detail: None,
-                river_path: None, delta_paths: None, stream_order: None, drainage_area_mi2: None,
-                discharge_index: None, tributary_count: None, length_mi: None, basin_id: None,
-                river_mouth: None, source_lake_id: None, river_source_x: None, river_source_y: None,
-                mouth_lake_id: None, source_name: None, source_feature_id: None, mouth_name: None,
-                mouth_feature_id: None, inlet_rivers: Vec::new(), outlet_rivers: Vec::new(), hydro_lake_id: None,
-                river_parent_index: None, river_chain_index: None, area_mi2: None, max_depth_ft: None, inlet_count: None, has_outlet: None,
-                kingdom_id: None, kingdom_name: None, political_rank: None,
-            });
-            if let Some(river) = self.out.features.iter_mut().find(|f| f.id == river_id) {
-                river.source_feature_id = Some(pond_id);
-                river.source_name = Some("Small unnamed pond".to_string());
-            }
-        }
         let parent_links: Vec<(String, usize)> = self.out.features.iter()
             .filter_map(|f| f.river_parent_index.map(|p| (f.id.clone(), p)))
             .collect();
@@ -1156,7 +1134,7 @@ fn build_delta_paths(
         }
     }
 
-    if paths.len() >= 3 { Some(paths) } else { None }
+    if paths.len() >= 2 { Some(paths) } else { None }
 }
 
 fn simplify_delta_path(inp: &Inputs, path: &[usize], blocked: &[bool]) -> Vec<usize> {
