@@ -167,7 +167,7 @@ impl RiverCurve {
         let amp = (0.075 * lambda * sinuosity).min((0.12 * cell_ft).max(1.5 * w));
         // The drainage graph already supplies terrain-derived bends. Only broad lowland reaches
         // receive a low-frequency meander; headwaters stay tightly constrained.
-        Frame { base, nrm, z, w, q, taper, lambda, amp, phase }
+        Frame { base, nrm, z, w, q, taper, lambda, amp, phase, wiggle: 0.0 }
     }
 }
 
