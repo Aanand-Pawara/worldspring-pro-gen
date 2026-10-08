@@ -11,7 +11,7 @@
 //! order-independent `min`) and raises the water surface to the river level (`max`), and
 //! `strips` returns the curve as polylines for the renderer.
 
-use crate::core::noise::{gradient2, smoothstep};
+use crate::core::noise::smoothstep;
 use crate::core::rng::hash2;
 
 /// Channel width (ft) from discharge (mm·cells); matches the renderer's expectations.
@@ -108,8 +108,7 @@ impl RiverCurve {
         let f = self.frame(k, t, cell_ft);
         // Unresolvable meanders fade out at coarse levels instead of aliasing into zigzags.
         let resolve = 1.0 - smoothstep(0.12, 0.35, spacing / f.lambda);
-        let resolve_drift = 1.0 - smoothstep(0.12, 0.35, spacing / f.drift_len);
-        let off = f.taper * (resolve * (f.amp * libm::sin(f.phase) + f.wiggle) + resolve_drift * f.drift);
+        let off = f.taper * resolve * (f.amp * libm::sin(f.phase));
         CurvePoint { p: [f.base[0] + f.nrm[0] * off, f.base[1] + f.nrm[1] * off], z: f.z, w: f.w, q: f.q }
     }
 
@@ -118,7 +117,6 @@ impl RiverCurve {
     /// reach plus half the channel).
     pub fn belt(&self, k: usize, t: f64, cell_ft: f64) -> ([f64; 2], [f64; 2], f64) {
         let f = self.frame(k, t, cell_ft);
-        let off = f.taper * f.drift;
         let half = f.taper * (f.amp + 1.2 * f.w) + 0.5 * f.w;
         ([f.base[0] + f.nrm[0] * off, f.base[1] + f.nrm[1] * off], f.nrm, half)
     }
@@ -165,14 +163,10 @@ impl RiverCurve {
         let sinuosity = lerp(sinu_at(k), sinu_at(k1));
         // Noise coordinates accumulate along the river (like the meander phase), so they
         // advance smoothly even where the width changes.
-        let vary = 0.6 + 0.4 * gradient2(self.seed, phase / (3.0 * std::f64::consts::TAU), 0.37);
-        let amp = (0.10 * lambda * sinuosity * vary).min((0.18 * cell_ft).max(2.0 * w));
-        let wphase = lerp(self.wphase[k], self.wphase[k1]);
-        let wiggle = 0.35 * w * gradient2(self.seed ^ 0x55, wphase, 0.71);
-        // Cell-scale drift: even small streams never run straight between T0 cells.
-        let drift_len = 2.5 * cell_ft;
-        let drift = 0.06 * cell_ft * gradient2(self.seed ^ 0x99, s / drift_len, 0.13);
-        Frame { base, nrm, z, w, q, taper, lambda, amp, phase, wiggle, drift_len, drift }
+        let amp = (0.075 * lambda * sinuosity).min((0.12 * cell_ft).max(1.5 * w));
+        // The drainage graph already supplies terrain-derived bends. Only broad lowland reaches
+        // receive a low-frequency meander; headwaters stay tightly constrained.
+        Frame { base, nrm, z, w, q, taper, lambda, amp, phase }
     }
 }
 
@@ -187,8 +181,6 @@ struct Frame {
     amp: f64,
     phase: f64,
     wiggle: f64,
-    drift_len: f64,
-    drift: f64,
 }
 
 impl RiverNet {
