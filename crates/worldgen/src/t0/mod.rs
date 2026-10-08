@@ -524,6 +524,16 @@ impl T0 {
 
     /// (level over the wet corners or `DRY`, bilinear wet fraction 0..1).
     pub fn sample_lake(&self, x_ft: f64, y_ft: f64) -> (f32, f64) {
+        if let Some(extra) = &self.extra {
+            return lake_at_topology(
+                &self.water,
+                self.cell_ft,
+                self.biome_seed,
+                x_ft,
+                y_ft,
+                &extra.hydro.lake_of,
+            );
+        }
         lake_at(&self.water, self.cell_ft, self.biome_seed, x_ft, y_ft)
     }
 
@@ -895,6 +905,77 @@ pub fn lake_at(g: &Grid<f32>, cell_ft: f64, biome_seed: u64, x_ft: f64, y_ft: f6
     (level as f32, (wsum + wobble * (1.0 - (2.0 * wsum - 1.0).abs()) * smoothstep(0.15, 0.3, edge)).clamp(0.0, 1.0))
 }
 
+/// Topology-aware water sampling. Elevation interpolation is allowed within one water
+/// component, but two distinct lakes are never blended merely because they share an elevation.
+fn lake_at_topology(
+    g: &Grid<f32>,
+    cell_ft: f64,
+    biome_seed: u64,
+    x_ft: f64,
+    y_ft: f64,
+    lake_of: &[u32],
+) -> (f32, f64) {
+    let x = (x_ft / cell_ft).clamp(0.0, (g.w - 1) as f64);
+    let y = (y_ft / cell_ft).clamp(0.0, (g.h - 1) as f64);
+    let (x0, y0) = (crate::core::floor(x) as usize, crate::core::floor(y) as usize);
+    let (x1, y1) = ((x0 + 1).min(g.w - 1), (y0 + 1).min(g.h - 1));
+    let (fx, fy) = (x - x0 as f64, y - y0 as f64);
+    let corners = [
+        (x0, y0, g.get(x0, y0), (1.0 - fx) * (1.0 - fy)),
+        (x1, y0, g.get(x1, y0), fx * (1.0 - fy)),
+        (x0, y1, g.get(x0, y1), (1.0 - fx) * fy),
+        (x1, y1, g.get(x1, y1), fx * fy),
+    ];
+
+    let mut groups: Vec<(u32, f64)> = Vec::with_capacity(4);
+    for &(cx, cy, value, weight) in &corners {
+        if value <= hydro::DRY || weight <= 0.0 { continue; }
+        let cell = cy * g.w + cx;
+        let id = lake_of.get(cell).copied().unwrap_or(hydro::NO_LAKE);
+        if let Some(group) = groups.iter_mut().find(|(gid, _)| *gid == id) {
+            group.1 += weight;
+        } else {
+            groups.push((id, weight));
+        }
+    }
+    if groups.is_empty() {
+        return (hydro::DRY, 0.0);
+    }
+
+    // Choose the dominant connected water component. This keeps neighbouring lakes
+    // separate while preserving smooth interpolation inside each individual lake.
+    groups.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    let chosen_id = groups[0].0;
+    let mut sum = 0.0;
+    let mut weight_sum = 0.0;
+    for &(cx, cy, value, weight) in &corners {
+        if value <= hydro::DRY || weight <= 0.0 { continue; }
+        let cell = cy * g.w + cx;
+        let id = lake_of.get(cell).copied().unwrap_or(hydro::NO_LAKE);
+        if id == chosen_id {
+            sum += value as f64 * weight;
+            weight_sum += weight;
+        }
+    }
+    if weight_sum <= 1e-12 {
+        return (hydro::DRY, 0.0);
+    }
+
+    let level = sum / weight_sum;
+    let wobble = 0.3 * fbm(biome_seed ^ 0x51a4e, x * 2.2, y * 2.2, 3, 2.1, 0.5);
+    let mask = if weight_sum >= 1.0 {
+        1.0
+    } else {
+        let edge = weight_sum.min(1.0 - weight_sum);
+        if edge <= 0.15 {
+            weight_sum
+        } else {
+            (weight_sum + wobble * (1.0 - (2.0 * weight_sum - 1.0).abs()) * smoothstep(0.15, 0.3, edge)).clamp(0.0, 1.0)
+        }
+    };
+    (level as f32, mask)
+}
+
 /// River curves from the hydrology chains. Water surface along each river is its cells'
 /// (filled, strictly decreasing) heights, ending at the sea or lake level at the mouth.
 /// Meanders are tapered to zero at sources, mouths and where tributaries join, so lines meet.
@@ -1000,8 +1081,8 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
                 // already contains the accumulated downstream discharge and widens after it.
                 q.push(last_q.max(q.iter().copied().fold(0.0, f32::max)));
             }
+            let original_points = tapers[ri].len();
             let mut taper = tapers[ri].clone();
-            while taper.len() < pts.len() { taper.push(0.0); }
             if pts.len() < 2 { return None; }
             let n = pts.len();
             let last_z = z.last().copied().unwrap_or(sea as f32);
@@ -1009,6 +1090,18 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
             z.resize(n, last_z);
             q.resize(n, last_q);
             taper.resize(n, 0.0);
+            if n > original_points && matches!(r.mouth, hydro::Mouth::Lake | hydro::Mouth::Ocean) {
+                // Geometry added from the authoritative receiver graph must remain visible
+                // all the way into the receiving water. The old zero-filled extension made
+                // the final 1-3 cells transparent, producing a visible shoreline gap.
+                for k in 0..n {
+                    let distance = (n - 1 - k) as f64;
+                    let mouth = (1.0 - crate::core::noise::smoothstep(0.0, 3.0, distance)) as f32;
+                    taper[k] = taper[k].max(mouth);
+                }
+            } else {
+                taper.resize(n, 0.0);
+            }
             Some(RiverCurve::new(pts, z, q, taper, river_seed(world.seed, ri)))
         })
         .collect();
@@ -1067,4 +1160,19 @@ fn downsample(w: usize, h: usize, v: &[f64]) -> Vec<f64> {
         }
     }
     out
+}
+
+
+
+#[cfg(test)]
+mod lake_sampling_tests {
+    use super::*;
+
+    #[test]
+    fn lake_sampling_keeps_same_level_lakes_separate() {
+        let g = Grid::from_vec(2, 2, vec![100.0, 100.0, hydro::DRY, hydro::DRY]);
+        let lake_of = vec![0, 1, hydro::NO_LAKE, hydro::NO_LAKE];
+        let (_, mask) = lake_at_topology(&g, 1.0, 0, 0.5, 0.5, &lake_of);
+        assert!(mask > 0.0 && mask < 1.0);
+    }
 }
