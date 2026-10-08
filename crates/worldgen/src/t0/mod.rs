@@ -898,7 +898,7 @@ pub fn lake_at(g: &Grid<f32>, cell_ft: f64, biome_seed: u64, x_ft: f64, y_ft: f6
 /// River curves from the hydrology chains. Water surface along each river is its cells'
 /// (filled, strictly decreasing) heights, ending at the sea or lake level at the mouth.
 /// Meanders are tapered to zero at sources, mouths and where tributaries join, so lines meet.
-fn build_river_net(world: &World, w: usize, cell: f64, _height: &[f64], land: &[bool], hydro: &hydro::Hydro) -> RiverNet {
+fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[bool], hydro: &hydro::Hydro) -> RiverNet {
     let sea = world.params().sea_level_ft;
     let h = height.len() / w;
     let chains = &hydro.rivers;
