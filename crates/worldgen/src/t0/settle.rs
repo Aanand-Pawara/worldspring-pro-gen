@@ -352,21 +352,50 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         if count == 0 {
             continue;
         }
+        // Spatially index placed settlements. The old all-settlements scan was O(candidates ×
+        // settlements), so large worlds became quadratic once the area-based quota grew.
+        let min_spacing = 10.0 * 5280.0 / cell;
+        let search_radius = spacing.max(min_spacing).ceil() as i64;
+        let bucket_side = search_radius.max(1) as usize;
+        let grid_w = (w + bucket_side - 1) / bucket_side;
+        let grid_h = (h + bucket_side - 1) / bucket_side;
+        let mut placed_cells: Vec<Vec<usize>> = vec![Vec::new(); grid_w * grid_h];
+        for s in &out {
+            let x = s.cell % w;
+            let y = s.cell / w;
+            let bx = (x / bucket_side).min(grid_w - 1);
+            let by = (y / bucket_side).min(grid_h - 1);
+            placed_cells[by * grid_w + bx].push(s.cell);
+        }
         for &(_, k) in &cands {
             if placed >= count {
                 break;
             }
             let (cx, cy) = ((k % w) as f64, (k / w) as f64);
-            let ok = out.iter().all(|s| {
-                let (sx, sy) = ((s.cell % w) as f64, (s.cell / w) as f64);
-                let d = crate::core::sqrt((sx - cx) * (sx - cx) + (sy - cy) * (sy - cy));
-                let need = if s.tier >= tier { spacing } else { 10.0 * 5280.0 / cell };
-                d >= need.max(10.0 * 5280.0 / cell)
-            });
+            let x = k % w;
+            let y = k / w;
+            let bx = x / bucket_side;
+            let by = y / bucket_side;
+            let mut ok = true;
+            'nearby: for ny in by.saturating_sub(1)..=(by + 1).min(grid_h - 1) {
+                for nx in bx.saturating_sub(1)..=(bx + 1).min(grid_w - 1) {
+                    for &other_cell in &placed_cells[ny * grid_w + nx] {
+                        let s = &out[other_cell];
+                        let (sx, sy) = ((s.cell % w) as f64, (s.cell / w) as f64);
+                        let d = crate::core::sqrt((sx - cx) * (sx - cx) + (sy - cy) * (sy - cy));
+                        let need = if s.tier >= tier { spacing } else { min_spacing };
+                        if d < need.max(min_spacing) {
+                            ok = false;
+                            break 'nearby;
+                        }
+                    }
+                }
+            }
             if !ok {
                 continue;
             }
             out.push(make(k, &mut rng, cx * cell, cy * cell, None));
+            placed_cells[by * grid_w + bx].push(k);
             placed += 1;
         }
     }
