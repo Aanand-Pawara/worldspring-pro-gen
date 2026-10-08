@@ -654,7 +654,7 @@ fn connect_close_lakes(w: usize, h: usize, land: &[bool], lake_of: &[u32], fille
             .filter_map(|c| {
                 let r = rec[c as usize] as usize;
                 if r == c as usize || r >= lake_of.len() || lake_of[r] == lake_id as u32 { return None; }
-                Some((filled[r], filled[c], c))
+                Some((filled[r], filled[c as usize], c))
             })
             .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)))
             .map(|(_, _, c)| c);
