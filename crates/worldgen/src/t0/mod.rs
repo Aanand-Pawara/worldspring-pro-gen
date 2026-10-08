@@ -900,6 +900,7 @@ pub fn lake_at(g: &Grid<f32>, cell_ft: f64, biome_seed: u64, x_ft: f64, y_ft: f6
 /// Meanders are tapered to zero at sources, mouths and where tributaries join, so lines meet.
 fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[bool], hydro: &hydro::Hydro) -> RiverNet {
     let sea = world.params().sea_level_ft;
+    let h = height.len() / w;
     let chains = &hydro.rivers;
         let mut tapers: Vec<Vec<f32>> = chains
         .iter()

@@ -1497,7 +1497,7 @@ fn validate_river_network(w: usize, h: usize, land: &[bool], lake_of: &[u32], re
 }
 
 fn append_lake_connectors(
-    w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u32], rec: &[u32],
+    w: usize, h: usize, _cell_ft: f64, land: &[bool], lake_of: &[u32], rec: &[u32],
     q: &[f64], accumulation: &[u32], basin_id: &[u64], lakes: &[Lake], chains: &mut Vec<River>,
 ) {
     let n = w * h;
