@@ -282,7 +282,7 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
     }
 }
 
-fn classify(t: f64, p: f64, range: f64, summer: f64, winter: f64, snow: f64, elev: f64, lapse: f64) -> u8 {
+fn classify(t: f64, p: f64, range: f64, summer: f64, winter: f64, snow: f64, elev: f64, _lapse: f64) -> u8 {
     if t <= -5.0 { return ClimateClass::Polar as u8; }
     if elev > 4500.0 && t < 8.0 { return ClimateClass::Alpine as u8; }
     if t < 2.0 { return if p < 300.0 { ClimateClass::ColdDesert as u8 } else { ClimateClass::Tundra as u8 }; }
@@ -303,7 +303,7 @@ fn classify(t: f64, p: f64, range: f64, summer: f64, winter: f64, snow: f64, ele
     ClimateClass::TemperateContinental as u8
 }
 
-fn smooth_elevation(k: usize, w: usize, h: usize, smooth: &[f64], sea: f64) -> f64 {
+fn smooth_elevation(k: usize, _w: usize, _h: usize, smooth: &[f64], sea: f64) -> f64 {
     if k >= smooth.len() { return 0.0; }
     ((smooth[k] - sea).max(0.0) * 0.3048).max(0.0)
 }
