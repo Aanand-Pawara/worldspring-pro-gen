@@ -94,8 +94,8 @@ impl WorldParams {
 
     fn validate(&self) -> Result<(), String> {
         let checks: [(bool, &str); 13] = [
-            ((150.0..=3000.0).contains(&self.width_mi), "width_mi must be 150–3000"),
-            ((100.0..=3000.0).contains(&self.height_mi), "height_mi must be 100–3000"),
+            ((150.0..=12000.0).contains(&self.width_mi), "width_mi must be 150–12000"),
+            ((100.0..=12000.0).contains(&self.height_mi), "height_mi must be 100–12000"),
             ((0.05..=0.95).contains(&self.land_fraction), "land_fraction must be 0.05–0.95"),
             ((0.0..=3.0).contains(&self.ruggedness), "ruggedness must be 0–3"),
             ((4..=40).contains(&self.plate_count), "plate_count must be 4–40"),

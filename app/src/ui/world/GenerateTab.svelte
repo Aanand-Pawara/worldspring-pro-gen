@@ -37,8 +37,8 @@
       label: 'Size & land',
       open: true,
       sliders: [
-        ['width_mi', 'Map width', 300, 3000, 50, (v) => `${v.toLocaleString()} mi`],
-        ['height_mi', 'Map height', 200, 3000, 50, (v) => `${v.toLocaleString()} mi`],
+        ['width_mi', 'Map width', 300, 12000, 50, (v) => `${v.toLocaleString()} mi`],
+        ['height_mi', 'Map height', 200, 12000, 50, (v) => `${v.toLocaleString()} mi`],
         ['land_fraction', 'Land', 0.1, 0.8, 0.01, (v) => `${Math.round(v * 100)}%`],
       ],
     },
