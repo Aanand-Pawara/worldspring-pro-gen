@@ -757,8 +757,8 @@ fn connect_nearby_river_termini_to_water(
     w: usize, h: usize, land: &[bool], lake_of: &[u32], filled: &[f64], q: &[f64],
     threshold: f64, rec: &mut [u32],
 ) {
-    const MAX_RADIUS: usize = 24;
-    const MAX_RISE: f64 = 2.0;
+    const MAX_RADIUS: usize = 32;
+    const MAX_RISE: f64 = 6.0;
     if threshold <= 0.0 { return; }
     let n = w * h;
     let mut seen_terminal = vec![false; n];
@@ -766,7 +766,7 @@ fn connect_nearby_river_termini_to_water(
 
     // Inspect only the downstream edge of high-discharge regions, keeping this O(n).
     for i in 0..n {
-        if !land[i] || lake_of[i] != NO_LAKE || q[i] < threshold { continue; }
+        if !land[i] || lake_of[i] != NO_LAKE || q[i] < threshold * 0.5 { continue; }
         let r = rec[i] as usize;
         if r < n && land[r] && lake_of[r] == NO_LAKE && q[r] >= threshold { continue; }
         let mut cur = i;
@@ -815,7 +815,7 @@ fn connect_nearby_river_termini_to_water(
                     found = Some((cur, nb));
                     break;
                 }
-                if nb != source && q[nb] >= threshold * 0.5 { continue; }
+                if nb != source && q[nb] >= threshold * 0.25 { continue; }
                 let key = local(nb);
                 if filled[nb] > source_level + MAX_RISE || parent[key] != u32::MAX { continue; }
                 parent[key] = cur as u32;
@@ -901,7 +901,7 @@ fn lake_spill_path(
         let x = c as usize % w; let y = c as usize / w;
         min_x = min_x.min(x); min_y = min_y.min(y); max_x = max_x.max(x); max_y = max_y.max(y);
     }
-    let margin = 3usize;
+    let margin = 6usize;
     min_x = min_x.saturating_sub(margin); min_y = min_y.saturating_sub(margin);
     max_x = (max_x + margin + 1).min(w); max_y = (max_y + margin + 1).min(h);
     if min_x >= max_x || min_y >= max_y { return None; }
@@ -952,7 +952,7 @@ fn lake_spill_path(
             }
 
             if !land[nb] || lake_of[nb] != NO_LAKE || filled[nb] > source_level + LAKE_SPILL_TOLERANCE_FT { continue; }
-            if filled[nb] > filled[cur] + 1.0 { continue; }
+            if filled[nb] > filled[cur] + LAKE_SPILL_TOLERANCE_FT { continue; }
 
             let next_saddle = saddle.max((filled[nb] * 100.0).max(0.0) as u64);
             let uphill = (filled[nb] - filled[cur]).max(0.0);
@@ -1586,6 +1586,32 @@ mod tests {
         let mut cur = rec[outlet] as usize; let mut reached = false;
         for _ in 0..n { assert!(cur < n); if !land[cur] { reached = true; break; } cur = rec[cur] as usize; }
         assert!(reached);
+    }
+
+    #[test]
+    fn close_lakes_allow_small_raster_steps_below_spill_tolerance() {
+        let w = 9; let h = 3; let n = w * h;
+        let mut lake_of = vec![NO_LAKE; n];
+        let mut a = Vec::new(); let mut b = Vec::new();
+        for y in 1..2 { for x in 1..3 { lake_of[y * w + x] = 0; a.push((y * w + x) as u32); } }
+        for y in 1..2 { for x in 6..8 { lake_of[y * w + x] = 1; b.push((y * w + x) as u32); } }
+        let land = lake_of.iter().map(|&id| id == NO_LAKE).collect::<Vec<_>>();
+        let filled = (0..n).map(|i| {
+            let x = i % w;
+            match x {
+                3 => 103.0,
+                4 => 106.0,
+                5 => 104.0,
+                _ => 100.0,
+            }
+        }).collect::<Vec<_>>();
+        let mut rec: Vec<u32> = (0..n).map(|i| i as u32).collect();
+        let mut lakes = vec![
+            Lake { level_ft: 100.0, cells: a, kind: LakeKind::Fresh, max_depth_ft: 100.0, outlet: None, inlet_count: 0 },
+            Lake { level_ft: 99.5, cells: b, kind: LakeKind::Fresh, max_depth_ft: 100.0, outlet: None, inlet_count: 0 },
+        ];
+        connect_close_lakes(w, h, &land, &lake_of, &filled, &mut rec, &mut lakes);
+        assert!(lakes[0].outlet.is_some() || lakes[1].outlet.is_some());
     }
 
     #[test]
