@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const [prefix = 'shot', url = 'http://localhost:5173/', viewsJson = '[{"name":"continent"}]'] = process.argv.slice(2);
-const views = JSON.parse(viewsJson);
+const views = JSON.parse(process.env.SHOT_VIEWS_JSON ?? viewsJson);
 const port = 9334;
 const chromePath = [process.env.CHROME_PATH, 'C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome']
   .filter(Boolean)

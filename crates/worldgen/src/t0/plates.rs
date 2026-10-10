@@ -6,7 +6,7 @@
 //! Coordinates are "unit" coordinates: x in [0, 1] across the map, y in [0, aspect].
 
 use crate::World;
-use crate::core::noise::{fbm, ridged, smoothstep};
+use crate::core::noise::{NoiseGrid, smoothstep};
 use crate::core::rng::Pcg32;
 
 pub struct Tectonics {
@@ -66,6 +66,13 @@ pub fn build(world: &World, w: usize, h: usize) -> Tectonics {
     let s = |name: &str| world.stream(name);
     let (s_wx, s_wy, s_crust, s_base, s_old, s_age) =
         (s("t0.warp.x"), s("t0.warp.y"), s("t0.crust"), s("t0.base"), s("t0.old"), s("t0.age"));
+    let warp_x = NoiseGrid::new(s_wx, (0.0, 2.5), (0.0, 2.5 * aspect), 5, 2.0);
+    let warp_y = NoiseGrid::new(s_wy, (7.1, 9.6), (2.3, 2.3 + 2.5 * aspect), 5, 2.0);
+    let base_noise = NoiseGrid::new(s_base, (-0.5, 3.5), (-0.5 * aspect, 3.5 * aspect), 4, 2.0);
+    let old_noise = NoiseGrid::new(s_old, (-0.5, 3.0), (-0.5 * aspect, 3.0 * aspect), 4, 2.0);
+    let age_noise = NoiseGrid::new(s_age, (-0.3, 1.8), (-0.3 * aspect, 1.8 * aspect), 3, 2.0);
+    let crust_noise = NoiseGrid::new(s_crust, (-0.5, 3.1), (-0.5 * aspect, 3.1 * aspect), 7, 2.0);
+    let detail_noise = NoiseGrid::new(s_crust ^ 0x51, (-1.5, 10.5), (-1.5 * aspect, 10.5 * aspect), 5, 2.0);
 
     // Pass 1: nearest two plates per cell (in warped space) and the distance to their boundary.
     let n = w * h;
@@ -77,8 +84,8 @@ pub fn build(world: &World, w: usize, h: usize) -> Tectonics {
         for i in 0..w {
             let x = i as f64 / (w - 1) as f64;
             let q = [
-                x + 0.16 * fbm(s_wx, x * 2.5, y * 2.5, 5, 2.0, 0.55),
-                y + 0.16 * fbm(s_wy, x * 2.5 + 7.1, y * 2.5 + 2.3, 5, 2.0, 0.55),
+                x + 0.16 * warp_x.fbm(x * 2.5, y * 2.5, 0.55),
+                y + 0.16 * warp_y.fbm(x * 2.5 + 7.1, y * 2.5 + 2.3, 0.55),
             ];
             let (mut a, mut b) = ((usize::MAX, f64::INFINITY), (usize::MAX, f64::INFINITY));
             for (k, pl) in plates.iter().enumerate() {
@@ -173,9 +180,9 @@ pub fn build(world: &World, w: usize, h: usize) -> Tectonics {
         }
 
         // Interior: gentle hills everywhere plus a few ancient, worn ranges.
-        up += 0.01 + 0.04 * (0.5 + 0.5 * fbm(s_base, q[0] * 3.0, q[1] * 3.0, 4, 2.0, 0.5));
-        let old = ridged(s_old, q[0] * 2.5, q[1] * 2.5, 4);
-        up += 0.35 * old * old * smoothstep(0.15, 0.5, fbm(s_age, q[0] * 1.5, q[1] * 1.5, 3, 2.0, 0.5));
+        up += 0.01 + 0.04 * (0.5 + 0.5 * base_noise.fbm(q[0] * 3.0, q[1] * 3.0, 0.5));
+        let old = old_noise.ridged(q[0] * 2.5, q[1] * 2.5);
+        up += 0.35 * old * old * smoothstep(0.15, 0.5, age_noise.fbm(q[0] * 1.5, q[1] * 1.5, 0.5));
 
         for hs in &t.hotspots {
             let d = dist(*hs, [x, y]);
@@ -187,8 +194,8 @@ pub fn build(world: &World, w: usize, h: usize) -> Tectonics {
         // Fractal coast and islands; keep the map border at sea.
         // Plates bias where land is; noise decides the actual coastline (peninsulas, gulfs,
         // islands). The map edge only takes over in the outer margin.
-        crust = 0.55 * crust + 1.0 * fbm(s_crust, q[0] * 2.6, q[1] * 2.6, 7, 2.0, 0.55);
-        crust += 0.3 * fbm(s_crust ^ 0x51, q[0] * 9.0, q[1] * 9.0, 5, 2.0, 0.55);
+        crust = 0.55 * crust + 1.0 * crust_noise.fbm(q[0] * 2.6, q[1] * 2.6, 0.55);
+        crust += 0.3 * detail_noise.fbm(q[0] * 9.0, q[1] * 9.0, 0.55);
         let (ex, ey) = ((x - 0.5) / 0.5, (y - 0.5 * aspect) / (0.5 * aspect));
         crust -= 1.5 * smoothstep(0.8, 1.1, crate::core::sqrt(ex * ex + ey * ey));
 

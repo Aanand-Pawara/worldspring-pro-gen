@@ -152,7 +152,7 @@ pub fn assign(world: &World, w: usize, h: usize, cell_ft: f64, land: &[bool], he
     let mut kingdoms = Vec::with_capacity(capitals.len());
     for (ki, &cap) in capitals.iter().enumerate() {
         let s = &settlements[cap];
-        let culture = ((s.cell as u64).wrapping_mul(0x9e3779b97f4a7c15) as usize) % 5;
+        let culture = ((s.cell as u64).wrapping_mul(0x9e3779b97f4a7c15) % 5) as usize;
         kingdoms.push(Kingdom { id: ki as u16, name: namer.name(NameKind::Kingdom, culture), capital: cap, population: 0, area_cells: 0, cities: 0, towns: 0, villages: 0 });
     }
 

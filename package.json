@@ -11,5 +11,8 @@
     "check": "if [ \"$CI\" = \"true\" ]; then exit 0; else npm --prefix app run check; fi",
     "mapd": "cargo run --release -p mapd --",
     "publish": "node scripts/publish.mjs"
+  },
+  "dependencies": {
+    "vite": "^7.2.4"
   }
 }

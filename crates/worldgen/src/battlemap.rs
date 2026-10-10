@@ -587,6 +587,28 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         }
     }
+    {
+        for crossing in t0.crossings.iter().filter(|c| c.kind == crate::t0::roads::CrossingKind::Bridge && c.river_width_ft == 0.0) {
+            let (ux, uy) = (libm::cos(crossing.angle), libm::sin(crossing.angle));
+            let half_span = crossing.span_ft * 0.5 + 8.0;
+            let half_width = crossing.class.width_ft() * 0.5;
+            for j in -1..=SQ as i64 {
+                for i in -1..=SQ as i64 {
+                    let h = (j + 1) as usize * HS + (i + 1) as usize;
+                    if road_h[h] == 0 {
+                        continue;
+                    }
+                    let (x, y) = (ox + (i as f64 + 0.5) * SQUARE_FT, oy + (j as f64 + 0.5) * SQUARE_FT);
+                    let (dx, dy) = (x - crossing.x, y - crossing.y);
+                    let along = dx * ux + dy * uy;
+                    let across = -dx * uy + dy * ux;
+                    if along.abs() <= half_span && across.abs() <= half_width {
+                        road_h[h] |= 0x80;
+                    }
+                }
+            }
+        }
+    }
     // Settlements: buildings (roofs at eave height), streets and plazas, fields.
     let mut bld_h = vec![0u16; HS * HS];
     let mut urb_h = vec![0u8; HS * HS];
@@ -978,6 +1000,22 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                     shapes.push(VectorShape { kind: ShapeKind::RoadBridge, size: (deck / SQUARE_FT) as f32, pts: vec![local(&p0), local(&p1)] });
                 }
             }
+            {
+                for crossing in t0.crossings.iter().filter(|c| c.kind == crate::t0::roads::CrossingKind::Bridge && c.river_width_ft == 0.0) {
+                    if !owns([crossing.x, crossing.y]) {
+                        continue;
+                    }
+                    let (ux, uy) = (libm::cos(crossing.angle), libm::sin(crossing.angle));
+                    let reach = crossing.span_ft * 0.5 + 8.0;
+                    let p0 = [crossing.x - ux * reach, crossing.y - uy * reach];
+                    let p1 = [crossing.x + ux * reach, crossing.y + uy * reach];
+                    shapes.push(VectorShape {
+                        kind: ShapeKind::RoadBridge,
+                        size: ((crossing.class.width_ft() + 4.0) / SQUARE_FT) as f32,
+                        pts: vec![local(&p0), local(&p1)],
+                    });
+                }
+            }
         }
     }
     let road_bed = hh.clone();
@@ -1263,6 +1301,17 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         chunk.halo_height[(k / SQ + 1) * HS + k % SQ + 1] = chunk.height[k];
     }
     apply_edits(&mut chunk, &world.file.edits, ox, oy);
+    chunk.objects.retain(|o| {
+        let (i, j) = (o.x.floor() as i32, o.y.floor() as i32);
+        i >= 0
+            && j >= 0
+            && i < SQ as i32
+            && j < SQ as i32
+            && {
+                let k = j as usize * SQ + i as usize;
+                chunk.water_level[k] <= chunk.height[k]
+            }
+    });
     compute_edges(&mut chunk);
     chunk
 }
@@ -1402,7 +1451,7 @@ fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], seed: u64, gsx: 
         }
     }
     kinds.sort_by(|a, b| (a.0 as u8, a.1 as u16).cmp(&(b.0 as u8, b.1 as u16)));
-    for (b, kind, dens, wet_ok) in kinds {
+    for (b, kind, dens, _) in kinds {
         // Twice the lattice density, thinned by a clustering field (keyed to world position):
         // things gather in patches and leave open ground between, at the same mean density.
         let spacing = 10.0 / crate::core::sqrt(dens);
@@ -1445,7 +1494,7 @@ fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], seed: u64, gsx: 
                     continue;
                 }
                 let depth = c.water_level[k] - c.height[k];
-                let ok = if wet_ok { depth < 3.0 } else { depth <= 0.0 };
+                let ok = depth <= 0.0;
                 if !ok || (is_tree && slope[k] > 0.8) {
                     continue;
                 }

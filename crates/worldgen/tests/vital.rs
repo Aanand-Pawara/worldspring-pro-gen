@@ -70,6 +70,27 @@ fn rivers_flow_downhill() {
             }
         }
         assert!(checked > 1000, "seed {seed}: too few river cells ({checked})");
+        let deltas: Vec<_> = extra.overlay.features.iter().filter(|f| f.kind == "delta").collect();
+        assert!(deltas.len() >= 5, "seed {seed}: only {} deltas generated", deltas.len());
+        for delta in deltas {
+            let paths = delta.delta_paths.as_ref().expect("delta feature has no distributaries");
+            assert!(paths.len() >= 2, "seed {seed}: delta has fewer than two branches");
+            for path in paths {
+                let end = path.last().expect("delta branch has no endpoint");
+                let x = (end[0] / t0.cell_ft).round().clamp(0.0, (t0.height.w - 1) as f64) as usize;
+                let y = (end[1] / t0.cell_ft).round().clamp(0.0, (t0.height.h - 1) as f64) as usize;
+                let outlet = y * t0.height.w + x;
+                assert!(
+                    t0.height.data[outlet] <= t0.water.data[outlet],
+                    "seed {seed}: delta outlet is not in water"
+                );
+                assert_eq!(
+                    hydro.lake_of[outlet],
+                    worldgen::t0::hydro::NO_LAKE,
+                    "seed {seed}: ocean delta outlet terminates in a lake"
+                );
+            }
+        }
         // The fine river curve is continuous: sampled densely, no step jumps sideways
         // (noise racing where the width changes once made 300 ft zigzags).
         for (ri, r) in t0.rivers.rivers.iter().enumerate() {
@@ -272,7 +293,31 @@ fn settlements_on_their_water() {
                 }
             }
         }
-        assert!(near, "settlement {i} ({:?} {:?}) is not within {limit:.0} ft of water", s.tier, s.kind);
+        let mut nearest_wet = f64::INFINITY;
+        if !near {
+            let lattice = world.geom.spacing_ft(world.geom.first_refine_level - 1);
+            for a in 0..128 {
+                let ang = std::f64::consts::TAU * a as f64 / 128.0;
+                for step in 0..=(3.0 * t0.cell_ft / 50.0) as usize {
+                    let d = step as f64 * 50.0;
+                    let (x, y) = (s.x + ang.cos() * d, s.y + ang.sin() * d);
+                    if t0.sample_water(x, y) as f64 > t0.ground_at(x, y, lattice) {
+                        nearest_wet = nearest_wet.min(d);
+                        break;
+                    }
+                }
+            }
+        }
+        assert!(
+            near,
+            "settlement {i} ({:?} {:?}, coastal={}, river={}) at ({:.0}, {:.0}) is not within {limit:.0} ft of water; nearest sampled wet point: {nearest_wet:.0} ft",
+            s.tier,
+            s.kind,
+            s.coastal,
+            s.river,
+            s.x,
+            s.y
+        );
         checked += 1;
     }
     assert!(checked > 30, "too few waterside settlements ({checked})");
@@ -408,6 +453,23 @@ fn battlemap_guarantee() {
             let key = TileKey::surface(g.max_level, (x / size) as u32, (y / size) as u32);
             let c = ex.battlemap(key);
             checked += 1;
+            for (k, &building) in c.building.iter().enumerate() {
+                assert!(
+                    building == 0 || c.water_level[k] <= c.height[k],
+                    "seed {seed} {key:?}: building square {k} is submerged"
+                );
+            }
+            for object in &c.objects {
+                let (i, j) = (object.x.floor() as usize, object.y.floor() as usize);
+                let k = j * SQ + i;
+                assert!(
+                    c.water_level[k] <= c.height[k],
+                    "seed {seed} {key:?}: object {:?} is submerged at ({}, {})",
+                    object.kind,
+                    object.x,
+                    object.y
+                );
+            }
             if attempt < sites.len() {
                 assert!(c.building.iter().any(|&b| b != 0), "seed {seed}: settlement chunk {key:?} has no buildings");
             }

@@ -69,6 +69,10 @@ pub struct Crossing {
     pub y: f64,
     pub class: RoadClass,
     pub river_width_ft: f64,
+    /// Full bridge span along the road (zero when no bridge deck is built).
+    pub span_ft: f64,
+    /// Road heading in radians at the crossing.
+    pub angle: f64,
 }
 
 pub struct Network {
@@ -226,9 +230,81 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
                 };
                 let (x, y) = ((b % w) as f64 * cell, (b / w) as f64 * cell);
                 if !crossings.iter().any(|c| (c.x - x).abs() < cell * 0.5 && (c.y - y).abs() < cell * 0.5) {
-                    crossings.push(Crossing { kind, x, y, class: *class, river_width_ft: width });
+                    let dx = (b % w) as f64 - (a % w) as f64;
+                    let dy = (b / w) as f64 - (a / w) as f64;
+                    crossings.push(Crossing {
+                        kind,
+                        x,
+                        y,
+                        class: *class,
+                        river_width_ft: width,
+                        span_ft: width,
+                        angle: libm::atan2(dy, dx),
+                    });
                 }
             }
+        }
+    }
+    // A road profile that stays level across a deep, short terrain cut is a suspended
+    // crossing even when no mapped river occupies the ravine.
+    for road in &roads {
+        let mut samples = Vec::<(f64, [f64; 2], f64)>::new();
+        let mut along = 0.0;
+        for k in 0..road.pts.len().saturating_sub(1) {
+            let (a, b) = (road.pts[k], road.pts[k + 1]);
+            let len = dist(a, b);
+            let steps = (len / (cell * 0.125).max(100.0)).ceil().clamp(1.0, 128.0) as usize;
+            for j in 0..=steps {
+                if k > 0 && j == 0 {
+                    continue;
+                }
+                let t = j as f64 / steps as f64;
+                let p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+                let road_z = road.z[k] as f64 + (road.z[k + 1] - road.z[k]) as f64 * t;
+                let terrain_z = hgrid.sample_cubic(p[0] / cell, p[1] / cell);
+                samples.push((along + len * t, p, road_z - terrain_z));
+            }
+            along += len;
+        }
+        let mut i = 0;
+        while i < samples.len() {
+            if samples[i].2 < 60.0 {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i + 1 < samples.len() && samples[i + 1].2 >= 60.0 {
+                i += 1;
+            }
+            let end = i;
+            let span = samples[end].0 - samples[start].0
+                + if start == end { (cell * 0.125).max(100.0) } else { 0.0 };
+            if span >= (road.class.width_ft() * 2.0).max(100.0) && span <= (cell * 2.0).min(5_280.0) {
+                let p = [
+                    (samples[start].1[0] + samples[end].1[0]) * 0.5,
+                    (samples[start].1[1] + samples[end].1[1]) * 0.5,
+                ];
+                let before = samples[start.saturating_sub(1)].1;
+                let after = samples[(end + 1).min(samples.len() - 1)].1;
+                let angle = libm::atan2(after[1] - before[1], after[0] - before[0]);
+                let clear = crossings.iter().all(|c| {
+                    let dx = c.x - p[0];
+                    let dy = c.y - p[1];
+                    dx * dx + dy * dy > (span * 0.5 + cell * 0.25).powi(2)
+                });
+                if clear {
+                    crossings.push(Crossing {
+                        kind: CrossingKind::Bridge,
+                        x: p[0],
+                        y: p[1],
+                        class: road.class,
+                        river_width_ft: 0.0,
+                        span_ft: span,
+                        angle,
+                    });
+                }
+            }
+            i += 1;
         }
     }
     let mut rng = Pcg32::new(inp.world.stream("t0.waystation"), 23);
@@ -346,7 +422,7 @@ fn link_edges(settlements: &[Settlement], classes: &[RoadClass]) -> Vec<(usize, 
             let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
             if ra != rb { parent[ra] = rb; }
         }
-        for &(dab, a, b) in &pairs {
+        for &(_, a, b) in &pairs {
             let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
             if ra != rb {
                 parent[ra] = rb;

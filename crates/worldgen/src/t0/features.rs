@@ -315,7 +315,7 @@ impl Builder<'_> {
 
         // Topographic prominence by union-find over land cells, highest first.
         let mut order: Vec<usize> = (0..w * h).filter(|&k| inp.land[k]).collect();
-        order.sort_by(|&a, &b| inp.height[b].total_cmp(&inp.height[a]).then(a.cmp(&b)));
+        order.sort_unstable_by(|&a, &b| inp.height[b].total_cmp(&inp.height[a]).then(a.cmp(&b)));
         let mut parent: Vec<u32> = vec![u32::MAX; w * h];
         let mut summit: Vec<u32> = vec![u32::MAX; w * h];
         fn find(parent: &mut [u32], mut x: usize) -> usize {
@@ -620,14 +620,14 @@ impl Builder<'_> {
             if r.mouth == Mouth::Ocean && r.cells.len() >= super::hydro::DELTA_MIN_CELLS {
                 let mouth_q = r.q.last().copied().unwrap_or(r.peak_discharge) as f64;
                 let delta_strength = (mouth_q / super::hydro::RIVER_Q).max(0.0);
-                let eligible = delta_strength >= 1.25
-                    && (r.order >= 2 || r.drainage_area_cells >= 48)
+                let eligible = delta_strength >= 1.0
+                    && (r.order >= 2 || r.drainage_area_cells >= 24)
                     && r.length_ft >= (super::hydro::DELTA_MIN_CELLS as f64 * inp.cell_ft);
                 if eligible {
                     let mouth_cell = *r.cells.last().unwrap() as usize;
                     if let Some(receiver) = r.terminal_receiver.map(|c| c as usize) {
                         if receiver < inp.w * inp.h && !inp.land[receiver] {
-                            let desired = if delta_strength >= 6.0 { 3 } else { 2 };
+                            let desired = if delta_strength >= 6.0 { 4 } else { 3 };
                             if let Some(delta_paths) = build_delta_paths(inp, r, mouth_cell, receiver, desired) {
                                 if delta_paths.len() >= 2 {
                                     let spread_ft = delta_paths.iter()
@@ -922,12 +922,16 @@ fn build_delta_paths(
     river: &super::hydro::River,
     mouth: usize,
     ocean: usize,
-    _desired: usize,
+    desired: usize,
 ) -> Option<Vec<Vec<[f64; 2]>>> {
     let (w, h) = (inp.w, inp.h);
     let cell_ft = inp.cell_ft;
-    let mx = (mouth % w) as f64;
-    let my = (mouth / w) as f64;
+    let apex_index = river.cells.len().saturating_sub(9);
+    let apex = river.cells[apex_index] as usize;
+    let mx = (apex % w) as f64;
+    let my = (apex / w) as f64;
+    let mouth_x = (mouth % w) as f64;
+    let mouth_y = (mouth / w) as f64;
     let ox = (ocean % w) as f64;
     let oy = (ocean / w) as f64;
 
@@ -935,14 +939,14 @@ fn build_delta_paths(
     // point. Establish one stable apex-to-sea axis first. The parent river supplies the
     // tangent; the actual ocean receiver prevents a noisy D8 tangent from pointing inland.
     let anchor = river.cells[river.cells.len().saturating_sub(7)] as usize;
-    let mut tx = mx - (anchor % w) as f64;
-    let mut ty = my - (anchor / w) as f64;
+    let mut tx = mouth_x - (anchor % w) as f64;
+    let mut ty = mouth_y - (anchor / w) as f64;
     let tl = crate::core::sqrt(tx * tx + ty * ty).max(1e-6);
     tx /= tl;
     ty /= tl;
 
-    let mut oxv = ox - mx;
-    let mut oyv = oy - my;
+    let mut oxv = ox - mouth_x;
+    let mut oyv = oy - mouth_y;
     let ol = crate::core::sqrt(oxv * oxv + oyv * oyv).max(1e-6);
     oxv /= ol;
     oyv /= ol;
@@ -953,7 +957,7 @@ fn build_delta_paths(
     fx /= fl;
     fy /= fl;
 
-    let mouth_z = inp.height[mouth];
+    let mouth_z = inp.height[apex];
     let strength = (river.q.last().copied().unwrap_or(river.peak_discharge) as f64
         / super::hydro::RIVER_Q).max(1.0);
 
@@ -962,36 +966,34 @@ fn build_delta_paths(
     let radius = (11.0 + 2.0 * crate::core::sqrt(strength)).round() as usize;
     let radius = radius.clamp(11, 23);
 
-    // Existing rivers are hard obstacles. The parent is blocked too, except for the apex.
-    // This preserves the hydrology/feature separation without allowing a branch to crawl
-    // backwards along its parent.
+    // Keep major neighbouring channels as obstacles. Blocking every tributary and its
+    // surrounding cells closes most real coastlines before a delta can be routed.
     let mut blocked = vec![false; w * h];
     for other in &inp.hydro.rivers {
-        if other.source_cell == river.source_cell {
+        if other.source_cell == river.source_cell || other.order < 3 {
             continue;
         }
         for &c in &other.cells {
             let c = c as usize;
             blocked[c] = true;
-            for (nb, _) in neighbors(w, h, c) {
-                blocked[nb] = true;
-            }
         }
     }
-    for &c in &river.cells {
+    for &c in river.cells.iter().take(apex_index) {
         blocked[c as usize] = true;
     }
-    blocked[mouth] = false;
+    for &c in river.cells.iter().skip(apex_index) {
+        blocked[c as usize] = false;
+    }
 
     // A river-dominated delta is a small distributary network: several channels share
     // the proximal trunk, then separate around mouth bars into a fan of unequal outlets.
     // Keep this deliberately small so generated maps get morphology, not a bundle of scratches.
-    let branch_count = if strength >= 5.0 { 5 } else { 4 };
+    let branch_count = desired.clamp(3, 5);
     let mut targets = Vec::<(f64, f64, usize)>::new();
-    let target_angles: &[f64] = if branch_count == 5 {
-        &[-0.95_f64, -0.48, 0.0, 0.48, 0.95]
-    } else {
-        &[-0.82_f64, -0.30, 0.30, 0.82]
+    let target_angles: &[f64] = match branch_count {
+        3 => &[-0.68_f64, 0.04, 0.76],
+        4 => &[-0.88_f64, -0.31, 0.39, 0.93],
+        _ => &[-0.95_f64, -0.48, 0.0, 0.48, 0.95],
     };
     let target_radius = radius as f64 * 0.82;
 
@@ -1049,14 +1051,13 @@ fn build_delta_paths(
             targets.push((target_score, angle, k));
         }
     }
-
     // Select one terminal mouth for each intended finger. The separation constraint prevents
     // adjacent shoreline pixels from becoming fake duplicate distributaries.
     let mut chosen = Vec::<usize>::with_capacity(branch_count);
     for &wanted_angle in target_angles {
         let mut best: Option<(f64, usize)> = None;
         for &(score, angle, target) in &targets {
-            if (angle - wanted_angle).abs() > 0.32 {
+            if (angle - wanted_angle).abs() > 0.45 {
                 continue;
             }
             if chosen.iter().any(|&other| {
@@ -1074,13 +1075,13 @@ fn build_delta_paths(
             chosen.push(target);
         }
     }
-    if chosen.len() < 3 {
+    if chosen.len() < 2 {
         return None;
     }
 
     // Route all distributaries from the real mouth. Only the distal portion is reserved after
     // each route, so later branches naturally share the proximal trunk before bifurcating.
-    let branch_start = mouth;
+    let branch_start = apex;
     let mut used = vec![false; w * h];
     let mut paths = Vec::with_capacity(chosen.len());
 
@@ -1112,7 +1113,7 @@ fn build_delta_paths(
                     continue;
                 }
                 let simplified = simplify_delta_path(inp, &path, &blocked);
-                if simplified.len() < 4 {
+                if simplified.len() < 2 {
                     continue;
                 }
                 if best.as_ref().is_none_or(|b| simplified.len() < b.len()) {
@@ -1156,7 +1157,7 @@ fn build_delta_paths(
         }
     }
 
-    if paths.len() >= 3 { Some(paths) } else { None }
+    if paths.len() >= 2 { Some(paths) } else { None }
 }
 
 fn simplify_delta_path(inp: &Inputs, path: &[usize], blocked: &[bool]) -> Vec<usize> {

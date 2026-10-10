@@ -48,6 +48,8 @@ pub struct T0 {
     pub rivers: RiverNet,
     /// Road polylines (grade-profiled) with a spatial index.
     pub roads: RoadNet,
+    /// Road bridges, including spans over terrain cuts without mapped rivers.
+    pub crossings: Vec<roads::Crossing>,
     /// Settlements (their layouts are generated on demand, see `crate::town`).
     pub settlements: Vec<settle::Settlement>,
     /// Points of interest (ruins, towers, roadside inns), same order as their features; then
@@ -296,18 +298,18 @@ impl T0 {
             }
             best.map(|(_, p, hw)| (p, hw))
         };
+        // Clear candidate centres from channel belts before snapping waterside sites.
+        // Doing this afterward can undo the shore snap and leave a fishing village inland.
+        for s in &mut settlements {
+            let margin = if s.tier == settle::Tier::Village { 40.0 } else { 300.0 };
+            (s.x, s.y) = crate::lod::rivers::clear_of_rivers(&rivers, s.x, s.y, margin, cell);
+        }
         settle::snap_to_water(&mut settlements, cell, &wet, &nearest_river);
         progress("kingdoms", 0.0);
         let politics = politics::assign(world, w, h, cell, &land, &height, &hydro, &mut settlements, world.params().generate_kingdoms);
         progress("kingdoms", 1.0);
         let vents_at: Vec<(f64, f64, f64)> = volcanoes.iter().map(|v| (v.cx, v.cy, v.radius_ft)).collect();
         let mut pois = settle::place_pois(&sinp, &settlements, &vents_at);
-        // Towns sit beside rivers, not in them (the fine channel meanders through T0 cells).
-        for s in &mut settlements {
-            // Villages sit on the bank (fishing villages work the water); towns stand back.
-            let margin = if s.tier == settle::Tier::Village { 40.0 } else { 300.0 };
-            (s.x, s.y) = crate::lod::rivers::clear_of_rivers(&rivers, s.x, s.y, margin, cell);
-        }
         for p in &mut pois {
             (p.x, p.y) = crate::lod::rivers::clear_of_rivers(&rivers, p.x, p.y, 150.0, cell);
         }
@@ -446,6 +448,7 @@ impl T0 {
         t0.settlements = settlements.clone();
         t0.base_pois = pois.len();
         t0.pois = pois.clone();
+        t0.crossings = network.crossings.clone();
         t0.extra = Some(T0Extra { temp: clim.temp, precip: clim.precip, hydro, volcanoes, overlay, settlements, pois, crossings: network.crossings, politics });
         t0
     }
@@ -458,7 +461,7 @@ impl T0 {
             mips.push(next);
         }
         let n = height.w * height.h;
-        T0 { height, water, lake_of: vec![hydro::NO_LAKE; n], coast, biome, cell_ft, rivers, roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), biome_seed, mips, extra: None }
+        T0 { height, water, lake_of: vec![hydro::NO_LAKE; n], coast, biome, cell_ft, rivers, roads, crossings: Vec::new(), settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), biome_seed, mips, extra: None }
     }
 
     fn with_settlements(mut self, settlements: Vec<settle::Settlement>, pois: Vec<settle::Poi>) -> T0 {
@@ -760,6 +763,13 @@ impl T0 {
             out.extend_from_slice(&p.y.to_le_bytes());
             out.extend_from_slice(&p.seed.to_le_bytes());
         }
+        out.extend_from_slice(&(self.crossings.len() as u32).to_le_bytes());
+        for crossing in &self.crossings {
+            out.extend_from_slice(&[crossing.kind as u8, crossing.class as u8]);
+            for value in [crossing.x, crossing.y, crossing.river_width_ft, crossing.span_ft, crossing.angle] {
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+        }
         out
     }
 
@@ -858,6 +868,33 @@ impl T0 {
             let seed = u64::from_le_bytes(take(8)?.try_into().unwrap());
             pois.push(settle::Poi { kind, x, y, seed });
         }
+        drop(take);
+        let mut crossings = Vec::new();
+        if o < bytes.len() {
+            let mut crossing_o = o;
+            let mut take_crossing = |len: usize| -> Result<&[u8], String> {
+                let slice = bytes.get(crossing_o..crossing_o + len).ok_or("truncated T0 crossings")?;
+                crossing_o += len;
+                Ok(slice)
+            };
+            let count = u32::from_le_bytes(take_crossing(4)?.try_into().unwrap()) as usize;
+            crossings.reserve(count);
+            for _ in 0..count {
+                let tags = take_crossing(2)?;
+                let kind = match tags[0] {
+                    0 => roads::CrossingKind::Bridge,
+                    1 => roads::CrossingKind::Ford,
+                    _ => roads::CrossingKind::Ferry,
+                };
+                let class = roads::RoadClass::from_u8(tags[1]);
+                let x = f64::from_le_bytes(take_crossing(8)?.try_into().unwrap());
+                let y = f64::from_le_bytes(take_crossing(8)?.try_into().unwrap());
+                let river_width_ft = f64::from_le_bytes(take_crossing(8)?.try_into().unwrap());
+                let span_ft = f64::from_le_bytes(take_crossing(8)?.try_into().unwrap());
+                let angle = f64::from_le_bytes(take_crossing(8)?.try_into().unwrap());
+                crossings.push(roads::Crossing { kind, class, x, y, river_width_ft, span_ft, angle });
+            }
+        }
         let map_w = (w - 1) as f64 * cell_ft;
         let map_h = (h - 1) as f64 * cell_ft;
         let mut t0 = Self::from_grids(
@@ -872,15 +909,26 @@ impl T0 {
         )
         .with_settlements(settlements, pois);
         t0.lake_of = lake_of;
+        t0.crossings = crossings;
         Ok(t0)
     }
 }
 
 /// (water level or `DRY`, wet fraction 0..1) at a world position, with the shoreline wobble
 /// (see `T0::sample_lake`); usable before the T0 exists.
+fn lake_sample_coords(cell_ft: f64, biome_seed: u64, x_ft: f64, y_ft: f64, amplitude: f64) -> (f64, f64) {
+    let (x, y) = (x_ft / cell_ft, y_ft / cell_ft);
+    let scale = 12.0;
+    let warp_x = crate::core::noise::fbm(biome_seed ^ 0x6c61_6b65, x / scale, y / scale, 3, 2.1, 0.5);
+    let warp_y = crate::core::noise::fbm(biome_seed ^ 0x7761_7465, x / scale + 17.3, y / scale - 9.1, 3, 2.1, 0.5);
+    (x + amplitude * warp_x, y + amplitude * warp_y)
+}
+
 pub fn lake_at(g: &Grid<f32>, cell_ft: f64, biome_seed: u64, x_ft: f64, y_ft: f64) -> (f32, f64) {
-    let x = (x_ft / cell_ft).clamp(0.0, (g.w - 1) as f64);
-    let y = (y_ft / cell_ft).clamp(0.0, (g.h - 1) as f64);
+    let (cx, cy) = (x_ft / cell_ft, y_ft / cell_ft);
+    let (x, y) = lake_sample_coords(cell_ft, biome_seed, x_ft, y_ft, 0.03);
+    let x = x.clamp(0.0, (g.w - 1) as f64);
+    let y = y.clamp(0.0, (g.h - 1) as f64);
     let (x0, y0) = (crate::core::floor(x) as usize, crate::core::floor(y) as usize);
     let (x1, y1) = ((x0 + 1).min(g.w - 1), (y0 + 1).min(g.h - 1));
     let (fx, fy) = (x - x0 as f64, y - y0 as f64);
@@ -917,7 +965,6 @@ pub fn lake_at(g: &Grid<f32>, cell_ft: f64, biome_seed: u64, x_ft: f64, y_ft: f6
     if edge <= 0.15 {
         return (level as f32, wsum);
     }
-    let (cx, cy) = (x_ft / cell_ft, y_ft / cell_ft);
     let wobble = 0.3 * fbm(biome_seed ^ 0x51a4e, cx * 2.2, cy * 2.2, 3, 2.1, 0.5);
     (level as f32, (wsum + wobble * (1.0 - (2.0 * wsum - 1.0).abs()) * smoothstep(0.15, 0.3, edge)).clamp(0.0, 1.0))
 }
@@ -932,8 +979,9 @@ fn lake_at_topology(
     y_ft: f64,
     lake_of: &[u32],
 ) -> (f32, f64) {
-    let x = (x_ft / cell_ft).clamp(0.0, (g.w - 1) as f64);
-    let y = (y_ft / cell_ft).clamp(0.0, (g.h - 1) as f64);
+    let (x, y) = (x_ft / cell_ft, y_ft / cell_ft);
+    let x = x.clamp(0.0, (g.w - 1) as f64);
+    let y = y.clamp(0.0, (g.h - 1) as f64);
     let (x0, y0) = (crate::core::floor(x) as usize, crate::core::floor(y) as usize);
     let (x1, y1) = ((x0 + 1).min(g.w - 1), (y0 + 1).min(g.h - 1));
     let (fx, fy) = (x - x0 as f64, y - y0 as f64);
@@ -963,6 +1011,22 @@ fn lake_at_topology(
     // separate while preserving smooth interpolation inside each individual lake.
     groups.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
     let chosen_id = groups[0].0;
+    let corners = if chosen_id == hydro::NO_LAKE {
+        corners
+    } else {
+        let (x, y) = lake_sample_coords(cell_ft, biome_seed, x_ft, y_ft, 0.03);
+        let x = x.clamp(0.0, (g.w - 1) as f64);
+        let y = y.clamp(0.0, (g.h - 1) as f64);
+        let (x0, y0) = (crate::core::floor(x) as usize, crate::core::floor(y) as usize);
+        let (x1, y1) = ((x0 + 1).min(g.w - 1), (y0 + 1).min(g.h - 1));
+        let (fx, fy) = (x - x0 as f64, y - y0 as f64);
+        [
+            (x0, y0, g.get(x0, y0), (1.0 - fx) * (1.0 - fy)),
+            (x1, y0, g.get(x1, y0), fx * (1.0 - fy)),
+            (x0, y1, g.get(x0, y1), (1.0 - fx) * fy),
+            (x1, y1, g.get(x1, y1), fx * fy),
+        ]
+    };
     let mut sum = 0.0;
     let mut weight_sum = 0.0;
     for &(cx, cy, value, weight) in &corners {
@@ -1216,8 +1280,20 @@ mod lake_topology_serialization_tests {
             RoadNet::new(Vec::new(), 1.0, 1.0, 1.0),
         );
         t.lake_of = lake;
+        t.crossings.push(roads::Crossing {
+            kind: roads::CrossingKind::Bridge,
+            class: roads::RoadClass::Road,
+            x: 12.0,
+            y: 34.0,
+            river_width_ft: 0.0,
+            span_ft: 150.0,
+            angle: 0.25,
+        });
         let bytes = t.to_bytes();
         let loaded = T0::from_bytes(&bytes).expect("T0 roundtrip");
         assert_eq!(loaded.lake_of, vec![0, 0, hydro::NO_LAKE, hydro::NO_LAKE]);
+        assert_eq!(loaded.crossings.len(), 1);
+        assert_eq!(loaded.crossings[0].span_ft, 150.0);
+        assert_eq!(loaded.crossings[0].angle, 0.25);
     }
 }

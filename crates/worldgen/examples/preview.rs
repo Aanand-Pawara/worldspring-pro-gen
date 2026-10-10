@@ -72,9 +72,10 @@ fn main() {
     eprintln!("land {:.1}%  max elev {:.0} ft", 100.0 * land as f64 / (w * h) as f64, t0.height.data.iter().fold(f32::MIN, |a, &b| a.max(b)));
     let named = |k: &str| extra.overlay.features.iter().filter(|f| f.kind == k).count();
     eprintln!(
-        "rivers {} (named {}, falls {})  lakes {}  ranges {}  peaks {}  passes {}  volcanoes {}  islands {}  bays {}",
+        "rivers {} (named {}, deltas {}, falls {})  lakes {}  ranges {}  peaks {}  passes {}  volcanoes {}  islands {}  bays {}",
         t0.rivers.rivers.len(),
         named("river"),
+        named("delta"),
         named("waterfall"),
         extra.hydro.lakes.len(),
         named("range"),
@@ -84,6 +85,20 @@ fn main() {
         named("island"),
         named("bay")
     );
+    let mut deltas: Vec<_> = extra.overlay.features.iter().filter(|f| f.kind == "delta").collect();
+    deltas.sort_by(|a, b| {
+        b.discharge_index
+            .unwrap_or(0.0)
+            .total_cmp(&a.discharge_index.unwrap_or(0.0))
+    });
+    for delta in deltas.iter().take(8) {
+        let branches = delta.delta_paths.as_ref().map_or(0, Vec::len);
+        eprintln!(
+            "  delta ({branches} branches) at fx {:.4} fy {:.4}",
+            delta.x / world.geom.map_w_ft,
+            delta.y / world.geom.map_h_ft
+        );
+    }
     let mut bs: Vec<String> = ALL
         .iter()
         .filter(|b| counts[**b as usize] > 0 && !matches!(b, Biome::Ocean))

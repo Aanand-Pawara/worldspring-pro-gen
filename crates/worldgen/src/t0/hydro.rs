@@ -768,7 +768,7 @@ fn connect_nearby_river_termini_to_water(
     for i in 0..n {
         if !land[i] || lake_of[i] != NO_LAKE || q[i] < threshold * 0.5 { continue; }
         let r = rec[i] as usize;
-        if r < n && land[r] && lake_of[r] == NO_LAKE && q[r] >= threshold { continue; }
+        if r < n && r != i && land[r] && lake_of[r] == NO_LAKE && q[r] >= threshold { continue; }
         let mut cur = i;
         let mut terminal = None;
         for _ in 0..n {
@@ -1358,6 +1358,19 @@ fn extract_rivers(w: usize, h: usize, cell_ft: f64, land: &[bool], lake_of: &[u3
         chain.peak_discharge = chain.q.iter().copied().fold(0.0f32, f32::max);
         chain.length_cells = chain.cells.len().min(u32::MAX as usize) as u32;
         chain.length_ft = chain_length_ft(w, &chain.cells, cell_ft);
+        if let Some(receiver) = chain.terminal_receiver.map(|c| c as usize) {
+            if let Some(&last) = chain.cells.last() {
+                let last = last as usize;
+                let dx = (last % w) as f64 - (receiver % w) as f64;
+                let dy = (last / w) as f64 - (receiver / w) as f64;
+                let fraction = match chain.mouth {
+                    Mouth::Confluence => 1.0,
+                    Mouth::Ocean | Mouth::Lake => 0.5,
+                    Mouth::Dry => 0.0,
+                };
+                chain.length_ft += fraction * (dx * dx + dy * dy).sqrt() * cell_ft;
+            }
+        }
         chain.drainage_area_cells = chain.cells.iter().map(|&cc| accumulation[cc as usize]).max().unwrap_or(chain.drainage_area_cells);
     }
     chains
@@ -1769,10 +1782,11 @@ mod tests {
         let _ = (raw, lake_of);
     }
 
+    #[test]
     fn lake_outlet_is_mapped_as_a_river_at_lower_discharge() {
         let land = vec![true, true, true, false];
         let lake = vec![0, NO_LAKE, NO_LAKE, NO_LAKE];
-        let rec = vec![0, 2, 3, 3];
+        let rec = vec![1, 2, 3, 3];
         let q = vec![5_000.0, 5_000.0, 5_000.0, 0.0];
         let acc = vec![1, 2, 3, 0];
         let basin = vec![0x1_0000_0000, 0x3_0000_0003, 0x3_0000_0003, 0];
@@ -1810,7 +1824,7 @@ mod tests {
         assert_eq!(rivers[0].source_lake, Some(0));
         assert_eq!(rivers[0].mouth, Mouth::Ocean);
         assert!(rivers[0].length_ft > 0.0);
-        assert_eq!(rivers[0].basin_id, 3);
+        assert_eq!(rivers[0].basin_id, 0x3_0000_0003);
     }
 
     #[test]
@@ -1828,7 +1842,8 @@ mod tests {
             outlet: None,
             inlet_count: 1,
         }];
-        let rivers = extract_rivers(2, 1, 1.0, &land, &lake, &rec, &q, &acc, 20_000.0, &lakes);
+        let basin = vec![0x1_0000_0000; 2];
+        let rivers = extract_rivers(2, 1, 1.0, &land, &lake, &rec, &q, &acc, &basin, 20_000.0, &lakes);
         assert_eq!(rivers.len(), 1);
         assert_eq!(rivers[0].source_lake, None);
         assert_eq!(rivers[0].mouth, Mouth::Lake);
@@ -1910,6 +1925,7 @@ mod tests {
         }];
         assert!(!validate_river_network(4, 1, &land, &lake, &rec, &rivers));
         rivers[0].cells = vec![0, 1, 2];
+        rivers[0].q = vec![100.0, 150.0, 220.0];
         assert!(validate_river_network(4, 1, &land, &lake, &rec, &rivers));
     }
 
@@ -1942,12 +1958,17 @@ mod hydrology_regression_tests {
 
         let main = rivers.iter().find(|r| r.mouth == Mouth::Ocean).expect("main stem must reach the ocean");
         let tributaries: Vec<&River> = rivers.iter().filter(|r| r.mouth == Mouth::Confluence).collect();
-        assert_eq!(tributaries.len(), 2);
+        assert_eq!(tributaries.len(), 1);
         assert_eq!(main.order, 2);
         assert!(main.peak_discharge >= 220.0);
+        assert!(main.cells.contains(&0));
+        assert!(main.cells.contains(&1));
+        assert!(main.cells.contains(&3));
+        assert!(main.cells.contains(&4));
 
         for tributary in tributaries {
             assert_eq!(tributary.into, rivers.iter().position(|r| std::ptr::eq(r, main)));
+            assert_eq!(tributary.cells.first(), Some(&2));
             let last = *tributary.cells.last().unwrap() as usize;
             let join = rec[last] as usize;
             assert_eq!(tributary.terminal_receiver, Some(join as u32));
@@ -1966,7 +1987,6 @@ mod hydrology_regression_tests {
     }
 
     #[test]
-    #[test]
     fn nearby_dry_river_terminus_connects_to_water() {
         let w = 5; let h = 1;
         let land = vec![true, true, true, true, false];
@@ -1984,6 +2004,7 @@ mod hydrology_regression_tests {
         assert!(reached);
     }
 
+    #[test]
     fn flow_through_lake_preserves_outflow_when_local_balance_is_negative() {
         let land = vec![true, true, true, true, true, false];
         let lake = vec![NO_LAKE, 0, 0, NO_LAKE, NO_LAKE, NO_LAKE];
