@@ -927,11 +927,10 @@ fn build_delta_paths(
     let (w, h) = (inp.w, inp.h);
     let cell_ft = inp.cell_ft;
     let apex_index = river.cells.len().saturating_sub(9);
-    let apex = river.cells[apex_index] as usize;
-    let mx = (apex % w) as f64;
-    let my = (apex / w) as f64;
     let mouth_x = (mouth % w) as f64;
     let mouth_y = (mouth / w) as f64;
+    let mx = mouth_x;
+    let my = mouth_y;
     let ox = (ocean % w) as f64;
     let oy = (ocean / w) as f64;
 
@@ -957,7 +956,7 @@ fn build_delta_paths(
     fx /= fl;
     fy /= fl;
 
-    let mouth_z = inp.height[apex];
+    let mouth_z = inp.height[mouth];
     let strength = (river.q.last().copied().unwrap_or(river.peak_discharge) as f64
         / super::hydro::RIVER_Q).max(1.0);
 
@@ -1079,13 +1078,15 @@ fn build_delta_paths(
         return None;
     }
 
-    // Route all distributaries from the real mouth. Only the distal portion is reserved after
-    // each route, so later branches naturally share the proximal trunk before bifurcating.
-    let branch_start = apex;
+    // Let distributaries split progressively along the lower river instead of radiating from
+    // one upstream point. The existing main channel remains their shared, connected trunk.
     let mut used = vec![false; w * h];
     let mut paths = Vec::with_capacity(chosen.len());
 
     for (branch_index, &target) in chosen.iter().enumerate() {
+        let lower_river_span = river.cells.len() - 1 - apex_index;
+        let start_offset = lower_river_span * branch_index / (chosen.len() - 1);
+        let branch_start = river.cells[apex_index + start_offset] as usize;
         let mut goals = Vec::<usize>::new();
         for (nb, _) in neighbors(w, h, target) {
             if inp.land[nb]
@@ -1112,12 +1113,8 @@ fn build_delta_paths(
                 if path.len() < 5 {
                     continue;
                 }
-                let simplified = simplify_delta_path(inp, &path, &blocked);
-                if simplified.len() < 2 {
-                    continue;
-                }
-                if best.as_ref().is_none_or(|b| simplified.len() < b.len()) {
-                    best = Some(simplified);
+                if best.as_ref().is_none_or(|b| path.len() < b.len()) {
+                    best = Some(path);
                 }
             }
         }
@@ -1143,6 +1140,8 @@ fn build_delta_paths(
             }
         }
 
+        // Preserve the terrain-routed bends; line-of-sight simplification made the branches
+        // unnaturally straight and erased the lower river's irregular planform.
         let mut points = path.iter()
             .map(|&k| [(k % w) as f64 * cell_ft, (k / w) as f64 * cell_ft])
             .collect::<Vec<_>>();
@@ -1158,73 +1157,6 @@ fn build_delta_paths(
     }
 
     if paths.len() >= 2 { Some(paths) } else { None }
-}
-
-fn simplify_delta_path(inp: &Inputs, path: &[usize], blocked: &[bool]) -> Vec<usize> {
-    if path.len() <= 2 {
-        return path.to_vec();
-    }
-
-    let mut out = Vec::with_capacity(path.len());
-    let mut anchor = 0usize;
-    out.push(path[0]);
-
-    while anchor + 1 < path.len() {
-        let mut farthest = anchor + 1;
-        for candidate in (anchor + 2..path.len()).rev() {
-            if delta_segment_clear(inp, path[anchor], path[candidate], blocked) {
-                farthest = candidate;
-                break;
-            }
-        }
-        out.push(path[farthest]);
-        anchor = farthest;
-    }
-
-    out
-}
-
-fn delta_segment_clear(inp: &Inputs, a: usize, b: usize, blocked: &[bool]) -> bool {
-    let (w, h) = (inp.w, inp.h);
-    let mut x0 = (a % w) as isize;
-    let mut y0 = (a / w) as isize;
-    let x1 = (b % w) as isize;
-    let y1 = (b / w) as isize;
-
-    let dx = (x1 - x0).abs();
-    let dy = -(y1 - y0).abs();
-    let sx = if x0 < x1 { 1 } else { -1 };
-    let sy = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx + dy;
-
-    loop {
-        if x0 < 0 || y0 < 0 || x0 >= w as isize || y0 >= h as isize {
-            return false;
-        }
-        let k = y0 as usize * w + x0 as usize;
-        if !inp.land[k]
-            || inp.hydro.lake_of[k] != super::hydro::NO_LAKE
-            || (blocked[k] && k != a)
-        {
-            return false;
-        }
-
-        if x0 == x1 && y0 == y1 {
-            break;
-        }
-
-        let e2 = 2 * err;
-        if e2 >= dy {
-            err += dy;
-            x0 += sx;
-        }
-        if e2 <= dx {
-            err += dx;
-            y0 += sy;
-        }
-    }
-
-    true
 }
 
 fn delta_route(
